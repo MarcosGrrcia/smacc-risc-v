@@ -1,89 +1,96 @@
-// smacc_datapath.sv - computes avg / stddev / delta after STOP
+// smacc_datapath.sv: 5-stage pipeline that computes the derived statistics.
 //
-// 5-stage pipeline:
-//   S1  latch sum, sum_sq, count; delta = max - min
-//   S2  avg = sum / count, mean_sq = sum_sq / count
+//   S1  snapshot accumulators, delta = max - min
+//   S2  avg = sum / count, mean_sq = sum_of_squares / count
 //   S3  avg_sq = avg * avg
-//   S4  var = mean_sq - avg_sq (clamped to 0)
-//   S5  stddev = isqrt(var), latch results
+//   S4  variance = mean_sq - avg_sq (floored at 0)
+//   S5  stddev = isqrt(variance), results registered
 //
-// dp_done is a 1-cycle pulse when S5 is written. The CPU is stalled the
-// whole time so the mem registers can't change underneath us.
+// S1 captures on dp_start and S2-S4 free-run behind it; the valid bits only
+// track where the STOP is. dp_done pulses when S5 is written, and smacc_top
+// holds the CPU on pcpi_wait until then. Only one STOP is ever in flight.
 
 `ifndef SMACC_DATAPATH_SV
 `define SMACC_DATAPATH_SV
 
+`include "smacc_isa_defs.sv"
+
 module smacc_datapath (
-    input  wire        clk,
-    input  wire        rst,
-    input  wire        dp_start,
-    input  wire        dp_clear,       // START clears the old results
-    input  wire [31:0] min_out,
-    input  wire [31:0] max_out,
-    input  wire [63:0] count_out,
-    input  wire [63:0] sum_out,
-    input  wire [63:0] sum_of_sq_out,
-    output wire [31:0] dp_avg,         // top saturates this to 8 bits
-    output wire [7:0]  dp_stddev,
-    output wire [7:0]  dp_delta,
-    output wire        dp_done
+    input  logic                clk,
+    input  logic                rst,            // synchronous, active-high
+
+    input  logic                dp_start,       // one-cycle pulse from smacc_ctrl
+    input  logic                dp_clear,       // START: zero the result registers
+
+    input  logic [DATA_W-1:0]   min_out,
+    input  logic [DATA_W-1:0]   max_out,
+    input  logic [ACCUM_W-1:0]  count_out,
+    input  logic [ACCUM_W-1:0]  sum_out,
+    input  logic [ACCUM_W-1:0]  sum_of_sq_out,
+
+    output logic [DATA_W-1:0]   dp_avg,     // full width; smacc_top saturates it
+    output logic [FIELD_W-1:0]  dp_stddev,
+    output logic [FIELD_W-1:0]  dp_delta,
+    output logic                dp_done
 );
 
-    // integer sqrt, one result bit per iteration. 8-bit samples means the
-    // variance is < 2^16, so 32 bits in / 16 bits out is plenty.
-    function [15:0] isqrt32;
-        input [31:0] x;
-        reg   [31:0] rem, root, b;
-        integer i;
-        begin
-            rem  = x;
-            root = 0;
-            b    = 32'h4000_0000;
-            for (i = 0; i < 16; i = i + 1) begin
-                if (rem >= (root | b)) begin
-                    rem  = rem - (root | b);
-                    root = (root >> 1) | b;
-                end else begin
-                    root = root >> 1;
-                end
-                b = b >> 2;
+    // 32-bit radicand -> 16-bit root. Samples are 8-bit sensor data, so the
+    // variance fits comfortably in 32 bits.
+    function automatic logic [15:0] isqrt32(input logic [31:0] x);
+        logic [31:0] rem, root, b;
+        integer      i;
+        rem  = x;
+        root = '0;
+        b    = 32'h4000_0000;
+        for (i = 0; i < 16; i = i + 1) begin
+            if (rem >= (root | b)) begin
+                rem  = rem - (root | b);
+                root = (root >> 1) | b;
+            end else begin
+                root = root >> 1;
             end
-            isqrt32 = root[15:0];
+            b = b >> 2;
         end
+        isqrt32 = root[15:0];
     endfunction
 
-    function [7:0] sat8;
-        input [31:0] x;
-        sat8 = (|x[31:8]) ? 8'hFF : x[7:0];
+    function automatic logic [FIELD_W-1:0] sat8(input logic [DATA_W-1:0] x);
+        sat8 = (|x[DATA_W-1:FIELD_W]) ? {FIELD_W{1'b1}} : x[FIELD_W-1:0];
     endfunction
 
-    reg        s1_v, s2_v, s3_v, s4_v, done_r;
+    // S1
+    logic                s1_v;
+    logic [ACCUM_W-1:0]  s1_count, s1_sum, s1_sum_sq;
+    logic [DATA_W-1:0]   s1_delta;
+    // S2
+    logic                s2_v;
+    logic [DATA_W-1:0]   s2_avg;
+    logic [ACCUM_W-1:0]  s2_mean_sq;
+    logic [DATA_W-1:0]   s2_delta;
+    // S3
+    logic                s3_v;
+    logic [ACCUM_W-1:0]  s3_avg_sq, s3_mean_sq;
+    logic [DATA_W-1:0]   s3_avg, s3_delta;
+    // S4
+    logic                s4_v;
+    logic [31:0]         s4_var;
+    logic [DATA_W-1:0]   s4_avg, s4_delta;
+    // S5 (results)
+    logic                done_r;
+    logic [DATA_W-1:0]   avg_r;
+    logic [FIELD_W-1:0]  stddev_r, delta_r;
 
-    reg [63:0] s1_count, s1_sum, s1_sum_sq;
-    reg [31:0] s1_delta;
+    // mean_sq - avg_sq goes negative only on garbage input; clamp to 0.
+    logic [ACCUM_W-1:0]  s3_diff;
+    assign s3_diff = s3_mean_sq - s3_avg_sq;
 
-    reg [31:0] s2_avg;
-    reg [63:0] s2_mean_sq;
-    reg [31:0] s2_delta;
-
-    reg [63:0] s3_avg_sq, s3_mean_sq;
-    reg [31:0] s3_avg, s3_delta;
-
-    reg [31:0] s4_var, s4_avg, s4_delta;
-
-    reg [31:0] avg_r;
-    reg [7:0]  stddev_r, delta_r;
-
-    // negative only if something upstream went wrong; clamp to 0
-    wire [63:0] s3_diff = s3_mean_sq - s3_avg_sq;
-
-    always @(posedge clk) begin
+    always_ff @(posedge clk) begin
         if (rst) begin
-            s1_v   <= 0;
-            s2_v   <= 0;
-            s3_v   <= 0;
-            s4_v   <= 0;
-            done_r <= 0;
+            s1_v   <= 1'b0;
+            s2_v   <= 1'b0;
+            s3_v   <= 1'b0;
+            s4_v   <= 1'b0;
+            done_r <= 1'b0;
         end else begin
             s1_v   <= dp_start;
             s2_v   <= s1_v;
@@ -93,12 +100,12 @@ module smacc_datapath (
         end
     end
 
-    always @(posedge clk) begin
+    always_ff @(posedge clk) begin
         if (rst) begin
-            s1_count  <= 0;
-            s1_sum    <= 0;
-            s1_sum_sq <= 0;
-            s1_delta  <= 0;
+            s1_count  <= '0;
+            s1_sum    <= '0;
+            s1_sum_sq <= '0;
+            s1_delta  <= '0;
         end else if (dp_start) begin
             s1_count  <= count_out;
             s1_sum    <= sum_out;
@@ -107,47 +114,48 @@ module smacc_datapath (
         end
     end
 
-    // S2-S4 just run every cycle, the valid bits say where the STOP is
-    always @(posedge clk) begin
+    always_ff @(posedge clk) begin
         if (rst) begin
-            s2_avg     <= 0;
-            s2_mean_sq <= 0;
-            s2_delta   <= 0;
-            s3_avg_sq  <= 0;
-            s3_mean_sq <= 0;
-            s3_avg     <= 0;
-            s3_delta   <= 0;
-            s4_var     <= 0;
-            s4_avg     <= 0;
-            s4_delta   <= 0;
+            s2_avg     <= '0;
+            s2_mean_sq <= '0;
+            s2_delta   <= '0;
+            s3_avg_sq  <= '0;
+            s3_mean_sq <= '0;
+            s3_avg     <= '0;
+            s3_delta   <= '0;
+            s4_var     <= '0;
+            s4_avg     <= '0;
+            s4_delta   <= '0;
         end else begin
             s2_avg     <= s1_sum / s1_count;
             s2_mean_sq <= s1_sum_sq / s1_count;
             s2_delta   <= s1_delta;
 
-            s3_avg_sq  <= {32'b0, s2_avg} * {32'b0, s2_avg};
+            s3_avg_sq  <= {{(ACCUM_W-DATA_W){1'b0}}, s2_avg}
+                        * {{(ACCUM_W-DATA_W){1'b0}}, s2_avg};
             s3_mean_sq <= s2_mean_sq;
             s3_avg     <= s2_avg;
             s3_delta   <= s2_delta;
 
-            s4_var     <= s3_diff[63] ? 32'd0 : s3_diff[31:0];
+            s4_var     <= s3_diff[ACCUM_W-1] ? '0 : s3_diff[31:0];
             s4_avg     <= s3_avg;
             s4_delta   <= s3_delta;
         end
     end
 
-    always @(posedge clk) begin
+    // stddev of 8-bit samples is at most 127, so the root's low byte is it.
+    always_ff @(posedge clk) begin
         if (rst) begin
-            avg_r    <= 0;
-            stddev_r <= 0;
-            delta_r  <= 0;
+            avg_r    <= '0;
+            stddev_r <= '0;
+            delta_r  <= '0;
         end else if (dp_clear) begin
-            avg_r    <= 0;
-            stddev_r <= 0;
-            delta_r  <= 0;
+            avg_r    <= '0;
+            stddev_r <= '0;
+            delta_r  <= '0;
         end else if (s4_v) begin
             avg_r    <= s4_avg;
-            stddev_r <= isqrt32(s4_var);   // < 128 for 8-bit data
+            stddev_r <= isqrt32(s4_var);
             delta_r  <= sat8(s4_delta);
         end
     end
@@ -157,6 +165,6 @@ module smacc_datapath (
     assign dp_delta  = delta_r;
     assign dp_done   = done_r;
 
-endmodule
+endmodule: smacc_datapath
 
-`endif
+`endif // SMACC_DATAPATH_SV

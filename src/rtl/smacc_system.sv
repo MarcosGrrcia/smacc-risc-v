@@ -1,7 +1,10 @@
-// smacc_system.sv - PicoRV32 + SMACC
+// smacc_system.sv: System wrapper: PicoRV32 CPU + SMACC co-processor
 //
-// PCPI is wired up inside, only the memory bus and IRQs come out.
-// rst is active-high like the rest of SMACC, picorv32 wants resetn.
+// Connects the PicoRV32 PCPI bus to smacc_top internally.
+// Exposes the memory bus and IRQ interface for external integration.
+//
+// Reset: active-high rst is inverted to picorv32's active-low resetn.
+// PCPI: wired internally; no external ports needed.
 
 `ifndef SMACC_SYSTEM_SV
 `define SMACC_SYSTEM_SV
@@ -13,36 +16,38 @@ module smacc_system #(
     parameter [31:0] PROGADDR_IRQ   = 32'h0000_0010,
     parameter [31:0] STACKADDR      = 32'hffff_ffff
 ) (
-    input  wire        clk,
-    input  wire        rst,          // active-high
+    input  logic        clk,
+    input  logic        rst,          // active-high
 
-    output wire        trap,         // CPU trapped (illegal instruction, etc.)
+    output logic        trap,         // CPU trapped (illegal instruction, etc.)
 
     // Memory bus; connect to your RAM/flash/arbiter
-    output wire        mem_valid,    // CPU requesting a memory transaction
-    output wire        mem_instr,    // high when fetching an instruction
-    input  wire        mem_ready,    // memory accepted the transaction
-    output wire [31:0] mem_addr,
-    output wire [31:0] mem_wdata,
-    output wire [ 3:0] mem_wstrb,   // byte write strobes; 0000 = read
-    input  wire [31:0] mem_rdata,
+    output logic        mem_valid,    // CPU requesting a memory transaction
+    output logic        mem_instr,    // high when fetching an instruction
+    input  logic        mem_ready,    // memory accepted the transaction
+    output logic [31:0] mem_addr,
+    output logic [31:0] mem_wdata,
+    output logic [ 3:0] mem_wstrb,   // byte write strobes; 0000 = read
+    input  logic [31:0] mem_rdata,
 
     // IRQ interface
-    input  wire [31:0] irq,
-    output wire [31:0] eoi           // end-of-interrupt
+    input  logic [31:0] irq,
+    output logic [31:0] eoi           // end-of-interrupt
 );
 
-    wire resetn = ~rst;
+    // PicoRV32 uses active-low reset
+    logic resetn;
+    assign resetn = ~rst;
 
-    // PCPI
-    wire        pcpi_valid;
-    wire [31:0] pcpi_insn;
-    wire [31:0] pcpi_rs1;
-    wire [31:0] pcpi_rs2;
-    wire        pcpi_wr;
-    wire [31:0] pcpi_rd;
-    wire        pcpi_wait;
-    wire        pcpi_ready;
+    // PCPI wires, internal only
+    logic        pcpi_valid;
+    logic [31:0] pcpi_insn;
+    logic [31:0] pcpi_rs1;
+    logic [31:0] pcpi_rs2;
+    logic        pcpi_wr;
+    logic [31:0] pcpi_rd;
+    logic        pcpi_wait;
+    logic        pcpi_ready;
 
     picorv32 #(
         .ENABLE_PCPI    (1),
@@ -102,6 +107,6 @@ module smacc_system #(
         .pcpi_ready  (pcpi_ready)
     );
 
-endmodule
+endmodule: smacc_system
 
 `endif // SMACC_SYSTEM_SV

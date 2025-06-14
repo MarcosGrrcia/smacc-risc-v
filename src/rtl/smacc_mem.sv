@@ -1,48 +1,63 @@
-// smacc_mem.sv - running statistics registers
-// min/max/count/sum/sum_of_squares, all updated in the same cycle on DATA
+// smacc_mem.sv: Statistics register file for SMACC.
+// Stores min/max/count/sum/sum_of_squares; all updated in parallel on DATA.
 
 `ifndef SMACC_MEM_SV
 `define SMACC_MEM_SV
 
+`include "smacc_isa_defs.sv"
+
 module smacc_mem (
-    input  wire        clk,
-    input  wire        rst,
-    input  wire        clear,          // START
-    input  wire        write_enable,   // DATA
-    input  wire [31:0] data_in,
-    output reg  [31:0] min_out,
-    output reg  [31:0] max_out,
-    output reg  [63:0] count_out,
-    output reg  [63:0] sum_out,
-    output reg  [63:0] sum_of_sq_out,
-    output reg         overflow
+    input  logic                   clk,
+    input  logic                   rst,           // synchronous, active-high
+
+    input  logic                   clear,         // START: synchronous clear
+    input  logic                   write_enable,  // DATA: accumulate one sample
+    input  logic [DATA_W-1:0]      data_in,
+
+    output logic [DATA_W-1:0]      min_out,
+    output logic [DATA_W-1:0]      max_out,
+    output logic [ACCUM_W-1:0]     count_out,
+    output logic [ACCUM_W-1:0]     sum_out,
+    output logic [ACCUM_W-1:0]     sum_of_sq_out,
+
+    output logic                   overflow       // sticky; cleared by rst/clear
 );
 
-    wire [63:0] sq = {32'b0, data_in} * {32'b0, data_in};
+    localparam logic [ACCUM_W-1:0] ACCUM_MAX = {ACCUM_W{1'b1}};
 
-    // sum_of_squares can overflow with only two samples near 2^32, so it
-    // saturates and raises the error flag. sum would need ~2^32 samples,
-    // so it isn't checked.
-    wire sq_ovf = sum_of_sq_out > (64'hFFFF_FFFF_FFFF_FFFF - sq);
+    logic [ACCUM_W-1:0] sq;
+    assign sq = {{(ACCUM_W-DATA_W){1'b0}}, data_in} * {{(ACCUM_W-DATA_W){1'b0}}, data_in};
 
-    always @(posedge clk) begin
+    // Only sum_of_squares can realistically overflow (two samples near
+    // 2^32 are enough); sum would need ~2^32 of them. Saturate instead of
+    // wrapping and raise the error flag.
+    logic sq_ovf;
+    assign sq_ovf = (sum_of_sq_out > (ACCUM_MAX - sq));
+
+    always_ff @(posedge clk) begin
         if (rst || clear) begin
-            min_out       <= 32'hFFFF_FFFF;
-            max_out       <= 0;
-            count_out     <= 0;
-            sum_out       <= 0;
-            sum_of_sq_out <= 0;
-            overflow      <= 0;
+            min_out       <= {DATA_W{1'b1}};
+            max_out       <= '0;
+            count_out     <= '0;
+            sum_out       <= '0;
+            sum_of_sq_out <= '0;
+            overflow      <= 1'b0;
         end else if (write_enable) begin
-            if (data_in < min_out) min_out <= data_in;
-            if (data_in > max_out) max_out <= data_in;
+            if (data_in < min_out) begin
+                min_out <= data_in;
+            end
+            if (data_in > max_out) begin
+                max_out <= data_in;
+            end
             count_out     <= count_out + 1;
             sum_out       <= sum_out + data_in;
-            sum_of_sq_out <= sq_ovf ? 64'hFFFF_FFFF_FFFF_FFFF : sum_of_sq_out + sq;
-            if (sq_ovf) overflow <= 1;
+            sum_of_sq_out <= sq_ovf ? ACCUM_MAX : (sum_of_sq_out + sq);
+            if (sq_ovf) begin
+                overflow <= 1'b1;
+            end
         end
     end
 
-endmodule
+endmodule: smacc_mem
 
-`endif
+`endif // SMACC_MEM_SV
