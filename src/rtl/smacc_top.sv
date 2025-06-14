@@ -35,7 +35,7 @@ module smacc_top (
 
     // pcpi_valid stays high until we ack, so only act on the first cycle
     reg insn_sent;
-    always @(posedge clk or posedge rst) begin
+    always @(posedge clk) begin
         if (rst)
             insn_sent <= 0;
         else if (!pcpi_valid)
@@ -57,7 +57,7 @@ module smacc_top (
 
     // high while a STOP is waiting on the datapath
     reg stop_wait;
-    always @(posedge clk or posedge rst) begin
+    always @(posedge clk) begin
         if (rst)
             stop_wait <= 0;
         else if (dp_start)
@@ -115,7 +115,7 @@ module smacc_top (
     wire [7:0] avg_field = (dp_avg > 32'd255) ? 8'hFF : dp_avg[7:0];
 
     reg [63:0] out_reg;
-    always @(posedge clk or posedge rst) begin
+    always @(posedge clk) begin
         if (rst)
             out_reg <= 0;
         else

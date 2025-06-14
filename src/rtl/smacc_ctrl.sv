@@ -30,7 +30,7 @@ module smacc_ctrl (
 
     wire set_err  = mem_overflow || (is_data && !data_ok) || (is_stop && !stop_ok);
 
-    always @(posedge clk or posedge rst) begin
+    always @(posedge clk) begin
         if (rst) begin
             state <= `ST_IDLE;
             err   <= 1'b0;
