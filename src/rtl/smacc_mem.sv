@@ -25,8 +25,10 @@ module smacc_mem (
 
     localparam logic [ACCUM_W-1:0] ACCUM_MAX = {ACCUM_W{1'b1}};
 
+    logic [ACCUM_W-1:0] data_in_ext;
     logic [ACCUM_W-1:0] sq;
-    assign sq = {{(ACCUM_W-DATA_W){1'b0}}, data_in} * {{(ACCUM_W-DATA_W){1'b0}}, data_in};
+    assign data_in_ext = {{(ACCUM_W-DATA_W){1'b0}}, data_in};
+    assign sq          = data_in_ext * data_in_ext;
 
     // Only sum_of_squares can realistically overflow (two samples near
     // 2^32 are enough); sum would need ~2^32 of them. Saturate instead of
@@ -50,7 +52,7 @@ module smacc_mem (
                 max_out <= data_in;
             end
             count_out     <= count_out + 1;
-            sum_out       <= sum_out + data_in;
+            sum_out       <= sum_out + data_in_ext;
             sum_of_sq_out <= sq_ovf ? ACCUM_MAX : (sum_of_sq_out + sq);
             if (sq_ovf) begin
                 overflow <= 1'b1;

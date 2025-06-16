@@ -1,15 +1,26 @@
 #!/usr/bin/env bash
-# Build and run the SMACC testbench with Verilator.
-#   ./scripts/run_tests.sh           # run the tests
-#   ./scripts/run_tests.sh --wave    # also dump smacc_tb.vcd for GTKWave
-set -e
+# Lint the RTL and run the SMACC testbench (Verilator >= 5.0).
+#
+# Usage, from the project root:
+#   bash scripts/run_tests.sh           # lint + simulate
+#   bash scripts/run_tests.sh --wave    # also dump smacc_tb.vcd for GTKWave
+set -euo pipefail
 cd "$(dirname "$0")/.."
 
-WAVE=""
-if [ "$1" == "--wave" ]; then
-    WAVE="--trace +define+DUMP_VCD"
+WAVE_ARGS=""
+if [[ "${1:-}" == "--wave" ]]; then
+    WAVE_ARGS="--trace +define+DUMP_VCD"
 fi
 
-verilator --binary --timing -Wno-fatal $WAVE -Isrc/rtl --top-module smacc_tb \
-    -Mdir build/vtb -o smacc_tb_sim src/tb/smacc_tb.sv
+echo "== Lint (verilator -Wall) =="
+verilator --lint-only -Wall -Isrc/rtl --top-module smacc_top src/rtl/smacc_top.sv
+echo "clean"
+
+echo "== Build testbench =="
+# shellcheck disable=SC2086  # WAVE_ARGS is intentionally word-split
+verilator --binary --timing $WAVE_ARGS \
+    -Isrc/rtl --top-module smacc_tb -Mdir build/vtb -o smacc_tb_sim \
+    src/tb/smacc_tb.sv
+
+echo "== Run =="
 ./build/vtb/smacc_tb_sim

@@ -127,7 +127,7 @@ module smacc_datapath (
             s4_avg     <= '0;
             s4_delta   <= '0;
         end else begin
-            s2_avg     <= s1_sum / s1_count;
+            s2_avg     <= DATA_W'(s1_sum / s1_count);
             s2_mean_sq <= s1_sum_sq / s1_count;
             s2_delta   <= s1_delta;
 
@@ -155,7 +155,7 @@ module smacc_datapath (
             delta_r  <= '0;
         end else if (s4_v) begin
             avg_r    <= s4_avg;
-            stddev_r <= isqrt32(s4_var);
+            stddev_r <= FIELD_W'(isqrt32(s4_var));
             delta_r  <= sat8(s4_delta);
         end
     end

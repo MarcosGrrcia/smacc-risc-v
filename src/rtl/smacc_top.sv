@@ -30,9 +30,13 @@ module smacc_top (
 
     // PicoRV32 PCPI interface
     input  logic        pcpi_valid,
-    input  logic [31:0] pcpi_insn,
+    /* verilator lint_off UNUSEDSIGNAL */
+    input  logic [31:0] pcpi_insn,  // only [22:20], [13:12], [6:0] are decoded
+    /* verilator lint_on UNUSEDSIGNAL */
     input  logic [31:0] pcpi_rs1,
-    input  logic [31:0] pcpi_rs2,
+    /* verilator lint_off UNUSEDSIGNAL */
+    input  logic [31:0] pcpi_rs2,   // unused; SMACC ops only read rs1
+    /* verilator lint_on UNUSEDSIGNAL */
     output logic        pcpi_wr,
     output logic [31:0] pcpi_rd,
     output logic        pcpi_wait,
