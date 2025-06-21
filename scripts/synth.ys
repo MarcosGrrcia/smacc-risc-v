@@ -1,0 +1,12 @@
+# Yosys generic synthesis check for SMACC.
+# Run from the project root:  yosys -s scripts/synth.ys
+#
+# Confirms the design elaborates, contains no inferred latches, and reports
+# a technology-independent cell/flop count (numbers quoted in the docs).
+read_verilog -sv -Isrc/rtl src/rtl/smacc_top.sv
+hierarchy -check -top smacc_top
+proc
+opt_clean
+check
+synth -top smacc_top
+stat

@@ -102,3 +102,25 @@ readout is limited.
 
 **Overflow.** `sum_of_squares` saturates and sets `STATUS_ERROR` when it
 would overflow. `sum` is not checked; it would take about 2^32 samples.
+
+---
+
+## 7. Synthesis
+
+`yosys -s scripts/synth.ys` (Yosys 0.33, generic `synth`, no technology
+mapping), SMACC only:
+
+| Module           | Cells      |
+|------------------|------------|
+| smacc_datapath   | 70,039     |
+| smacc_mem        | 7,592      |
+| smacc_top        | 165        |
+| smacc_ctrl       | 54         |
+| **Total**        | **77,847** |
+
+1,010 flip-flops, all with synchronous reset. No inferred latches.
+
+Nearly all of it is the datapath, and nearly all of the datapath is the two
+64/64 combinational dividers in S2 (~31 K cells each when synthesized on
+their own). They are also by far the longest path in the design: 64
+dependent subtract/compare steps in a single cycle.
