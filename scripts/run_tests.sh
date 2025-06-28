@@ -2,7 +2,7 @@
 # Lint the RTL and run the SMACC testbench (Verilator >= 5.0).
 #
 # Usage, from the project root:
-#   bash scripts/run_tests.sh           # lint + simulate
+#   bash scripts/run_tests.sh           # lint + simulate (assertions on)
 #   bash scripts/run_tests.sh --wave    # also dump smacc_tb.vcd for GTKWave
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -18,7 +18,7 @@ echo "clean"
 
 echo "== Build testbench =="
 # shellcheck disable=SC2086  # WAVE_ARGS is intentionally word-split
-verilator --binary --timing $WAVE_ARGS \
+verilator --binary --timing --assert +define+SMACC_ASSERT $WAVE_ARGS \
     -Isrc/rtl --top-module smacc_tb -Mdir build/vtb -o smacc_tb_sim \
     src/tb/smacc_tb.sv
 

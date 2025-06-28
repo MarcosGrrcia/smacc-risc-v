@@ -160,6 +160,38 @@ module smacc_top (
     assign pcpi_wr = is_read & instr_valid;
     assign pcpi_rd = {24'b0, out_reg[(7 - stat_sel) * 8 +: 8]};
 
+    // -------------------------------------------------------------------
+    // Assertions
+    // -------------------------------------------------------------------
+`ifdef SMACC_ASSERT
+
+    ast_top_ready_needs_valid: assert property (
+        @(posedge clk) disable iff (rst)
+        pcpi_ready |-> pcpi_valid
+    ) else $error("[smacc_top] pcpi_ready asserted without pcpi_valid");
+
+    ast_top_ready_single_cycle: assert property (
+        @(posedge clk) disable iff (rst)
+        pcpi_ready |=> ~pcpi_ready
+    ) else $error("[smacc_top] pcpi_ready held for more than one cycle");
+
+    ast_top_wr_requires_ready: assert property (
+        @(posedge clk) disable iff (rst)
+        pcpi_wr |-> pcpi_ready
+    ) else $error("[smacc_top] pcpi_wr asserted without pcpi_ready");
+
+    ast_top_no_ready_while_waiting: assert property (
+        @(posedge clk) disable iff (rst)
+        (stop_wait_r && !dp_done) |-> !pcpi_ready
+    ) else $error("[smacc_top] pcpi_ready asserted during STOP stall");
+
+    ast_top_instr_valid_single_shot: assert property (
+        @(posedge clk) disable iff (rst)
+        (instr_valid & pcpi_valid) |=> (pcpi_valid |-> ~instr_valid)
+    ) else $error("[smacc_top] instr_valid re-asserted within same pcpi_valid window");
+
+`endif // SMACC_ASSERT
+
 endmodule: smacc_top
 
 `endif // SMACC_TOP_SV

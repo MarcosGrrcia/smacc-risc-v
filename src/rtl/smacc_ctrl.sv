@@ -95,6 +95,111 @@ module smacc_ctrl (
                        | ((err_sticky_r | set_error) ? STATUS_ERROR_MASK : 8'h00)
                        | {5'b0, state_r};
 
+    // -------------------------------------------------------------------
+    // Assertions
+    // -------------------------------------------------------------------
+`ifdef SMACC_ASSERT
+
+    ast_start_to_ready: assert property (
+        @(posedge clk) disable iff (rst)
+        (insn_valid && flavor == FLV_START) |=> (state_r == ST_READY)
+    ) else $error("[smacc_ctrl] START must transition to ST_READY");
+
+    ast_data_ready_to_accum: assert property (
+        @(posedge clk) disable iff (rst)
+        (insn_valid && flavor == FLV_DATA && state_r == ST_READY) |=> (state_r == ST_ACCUMULATE)
+    ) else $error("[smacc_ctrl] DATA in ST_READY must move to ST_ACCUMULATE");
+
+    ast_data_stays_accum: assert property (
+        @(posedge clk) disable iff (rst)
+        (insn_valid && flavor == FLV_DATA && state_r == ST_ACCUMULATE)
+        |=> (state_r == ST_ACCUMULATE)
+    ) else $error("[smacc_ctrl] DATA in ST_ACCUMULATE must remain in ST_ACCUMULATE");
+
+    ast_stop_to_compute: assert property (
+        @(posedge clk) disable iff (rst)
+        (insn_valid && flavor == FLV_STOP && state_r == ST_ACCUMULATE)
+        |=> (state_r == ST_COMPUTE)
+    ) else $error("[smacc_ctrl] STOP in ST_ACCUMULATE must move to ST_COMPUTE");
+
+    ast_compute_to_done: assert property (
+        @(posedge clk) disable iff (rst)
+        (dp_done && state_r == ST_COMPUTE) |=> (state_r == ST_DONE)
+    ) else $error("[smacc_ctrl] dp_done in ST_COMPUTE must move to ST_DONE");
+
+    // The CPU is stalled on pcpi_wait for the whole of ST_COMPUTE, so no new
+    // instruction can arrive until the pipeline drains.
+    ast_no_insn_in_compute: assert property (
+        @(posedge clk) disable iff (rst)
+        (state_r == ST_COMPUTE) |-> !insn_valid
+    ) else $error("[smacc_ctrl] instruction accepted while ST_COMPUTE");
+
+`ifndef VERILATOR  // Verilator (as of 5.0) lacks ##N / ##[M:N] sequence support
+    ast_idle_after_rst: assert property (
+        @(posedge clk)
+        $rose(rst) |-> ##1 (state_r == ST_IDLE)
+    ) else $error("[smacc_ctrl] State must be ST_IDLE the cycle after rst rises");
+`endif
+
+    ast_data_invalid_sets_error: assert property (
+        @(posedge clk) disable iff (rst)
+        (insn_valid && flavor == FLV_DATA && (state_r == ST_IDLE || state_r == ST_DONE))
+        |=> ((status_byte & STATUS_ERROR_MASK) != 8'h00)
+    ) else $error("[smacc_ctrl] Illegal DATA must set STATUS_ERROR");
+
+    ast_stop_invalid_sets_error: assert property (
+        @(posedge clk) disable iff (rst)
+        (insn_valid && flavor == FLV_STOP && state_r != ST_ACCUMULATE)
+        |=> ((status_byte & STATUS_ERROR_MASK) != 8'h00)
+    ) else $error("[smacc_ctrl] Illegal STOP must set STATUS_ERROR");
+
+    ast_error_sticky: assert property (
+        @(posedge clk) disable iff (rst)
+        (((status_byte & STATUS_ERROR_MASK) != 8'h00) && !(insn_valid && flavor == FLV_START))
+        |=> ((status_byte & STATUS_ERROR_MASK) != 8'h00)
+    ) else $error("[smacc_ctrl] STATUS_ERROR must remain set until START");
+
+    ast_start_clears_error: assert property (
+        @(posedge clk) disable iff (rst)
+        (insn_valid && flavor == FLV_START)
+        |=> ((status_byte & STATUS_ERROR_MASK) == 8'h00)
+    ) else $error("[smacc_ctrl] START must clear STATUS_ERROR");
+
+    ast_read_preserves_state: assert property (
+        @(posedge clk) disable iff (rst)
+        (insn_valid && flavor == FLV_READ)
+        |=> (state_r == $past(state_r))
+    ) else $error("[smacc_ctrl] READ must not change FSM state");
+
+    ast_no_idle_return: assert property (
+        @(posedge clk) disable iff (rst)
+        (state_r != ST_IDLE) |=> (state_r != ST_IDLE)
+    ) else $error("[smacc_ctrl] FSM must not return to ST_IDLE without rst");
+
+`ifndef VERILATOR
+    cov_full_sequence: cover property (
+        @(posedge clk) disable iff (rst)
+        (state_r == ST_IDLE)       ##[1:$]
+        (state_r == ST_READY)      ##[1:$]
+        (state_r == ST_ACCUMULATE) ##[1:$]
+        (state_r == ST_COMPUTE)    ##[1:$]
+        (state_r == ST_DONE)
+    );
+
+    cov_error_then_recovery: cover property (
+        @(posedge clk) disable iff (rst)
+        ((status_byte & STATUS_ERROR_MASK) != 8'h00)
+        ##[1:$] ((status_byte & STATUS_ERROR_MASK) == 8'h00)
+    );
+
+    cov_restart_after_done: cover property (
+        @(posedge clk) disable iff (rst)
+        (state_r == ST_DONE) ##[1:$] (state_r == ST_READY) ##[1:$] (state_r == ST_ACCUMULATE)
+    );
+`endif // VERILATOR
+
+`endif // SMACC_ASSERT
+
 endmodule: smacc_ctrl
 
 `endif // SMACC_CTRL_SV
