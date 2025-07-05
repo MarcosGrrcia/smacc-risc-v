@@ -24,7 +24,8 @@ module smacc_ctrl (
     input  logic       dp_done,        // one-cycle pulse from smacc_datapath
     input  logic       mem_overflow,   // sticky overflow flag from smacc_mem
 
-    output logic [7:0] status_byte
+    output logic [7:0] status_byte,
+    output logic       results_valid   // high in ST_DONE; gates avg/stddev/delta
 );
 
     smacc_state_e state_r, state_next;
@@ -90,10 +91,9 @@ module smacc_ctrl (
         endcase
     end
 
-    // Low bits carry the FSM state for debug.
-    assign status_byte = status_flags
-                       | ((err_sticky_r | set_error) ? STATUS_ERROR_MASK : 8'h00)
-                       | {5'b0, state_r};
+    assign status_byte   = status_flags
+                         | ((err_sticky_r | set_error) ? STATUS_ERROR_MASK : 8'h00);
+    assign results_valid = (state_r == ST_DONE);
 
     // -------------------------------------------------------------------
     // Assertions
@@ -170,6 +170,11 @@ module smacc_ctrl (
         (insn_valid && flavor == FLV_READ)
         |=> (state_r == $past(state_r))
     ) else $error("[smacc_ctrl] READ must not change FSM state");
+
+    ast_results_valid_only_done: assert property (
+        @(posedge clk) disable iff (rst)
+        results_valid |-> (state_r == ST_DONE)
+    ) else $error("[smacc_ctrl] results_valid asserted outside ST_DONE");
 
     ast_no_idle_return: assert property (
         @(posedge clk) disable iff (rst)
