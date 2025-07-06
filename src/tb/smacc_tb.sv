@@ -97,10 +97,14 @@ module smacc_tb;
         // T1: 5,10,...,50
         //   avg = 275/10 = 27, E[x^2] = 9625/10 = 962
         //   var = 962 - 729 = 233, stddev = 15, delta = 45
+        //   avg should read 0 until STOP is done
         $display("--- T1: 10 samples ---");
         do_reset;
         send(I_START, 0);
         for (i = 1; i <= 10; i = i + 1) send(I_DATA, i * 5);
+        send(i_read(0), 0); check("T1 run min", rd, 5);
+        send(i_read(3), 0); check("T1 run count", rd, 10);
+        send(i_read(2), 0); check("T1 avg gated", rd, 0);
         send(I_STOP, 0);
         read_all("T1", 5, 50, 27, 10, 15, 45);
 
@@ -161,6 +165,17 @@ module smacc_tb;
         for (i = 1; i <= 3; i = i + 1) send(I_DATA, i * 10);
         send(I_STOP, 0);
         read_all("T7", 10, 30, 20, 3, 8, 20);
+
+        // T8: values that don't fit in 8 bits
+        //   100000, 300000: avg 200000, var = 5e10 - 4e10 = 1e10,
+        //   stddev = 100000 exactly
+        $display("--- T8: large samples ---");
+        do_reset;
+        send(I_START, 0);
+        send(I_DATA, 100000);
+        send(I_DATA, 300000);
+        send(I_STOP, 0);
+        read_all("T8", 100000, 300000, 200000, 2, 100000, 200000);
 
         repeat (4) @(posedge clk);
         if (errors == 0) $display("\nALL TESTS PASSED");
