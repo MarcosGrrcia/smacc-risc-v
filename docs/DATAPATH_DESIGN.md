@@ -30,7 +30,7 @@ STOP issued (pcpi_wait goes high)
 | START     | 1      | Synchronous clear of all accumulators          |
 | DATA      | 1      | Comparators + accumulators update in parallel  |
 | STOP      | 6      | CPU stalled until the pipeline drains          |
-| READ      | 1      | Mux over the output register                   |
+| READ      | 1      | Combinational mux over mem / datapath / status |
 
 ---
 
@@ -54,8 +54,8 @@ DATA never takes more than one cycle.
 - **Accumulators:** 64-bit `sum` and `count`.
 - **Division:** `avg = sum / count` in pipeline stage S2 (combinational
   divider).
-- **Precision:** integer division, the fraction is dropped. The output
-  field is 8 bits and saturates at 255.
+- **Precision:** integer division, the fraction is dropped. The result is
+  returned at full 32-bit width.
 
 ---
 
@@ -70,18 +70,18 @@ stddev = sqrt( E[x^2] - E[x]^2 )
 |-------|---------------------------------------------|
 | S2    | `mean_sq = sum_of_squares / count`          |
 | S3    | `avg_sq = avg * avg`                        |
-| S4    | `variance = mean_sq - avg_sq` (clamped to 0)|
+| S4    | `variance = mean_sq - avg_sq` (floored to 0)|
 | S5    | `stddev = isqrt(variance)`                  |
 
-**isqrt** is the bit-by-bit method: 16 iterations of compare, subtract,
-shift, unrolled into combinational logic. 8-bit samples give a variance
-under 2^16, so a 32-bit input and 16-bit result are more than enough.
+**isqrt** is the bit-by-bit method: 32 iterations of compare, subtract,
+shift, unrolled into combinational logic. 64-bit radicand in, 32-bit root
+out; the variance of 32-bit samples is below 2^62, so the root always fits.
 
 ---
 
 ## 5. Delta
 
-`delta = max - min`, computed in S1 and saturated to 8 bits.
+`delta = max - min`, computed in S1. Full 32 bits.
 
 ---
 
@@ -96,9 +96,9 @@ operation.
 At 6 cycles this costs almost nothing, and software can read the results
 right after STOP returns without polling.
 
-**8-bit output fields.** All statistics fit in one 64-bit register that
-READ indexes by byte. The accumulators are still full width, so only the
-readout is limited.
+**32-bit results.** v1 packed every statistic into an 8-bit field of one
+64-bit output register. That only worked for 8-bit sample data, so READ
+now returns each statistic at full width through a mux instead.
 
 **Overflow.** `sum_of_squares` saturates and sets `STATUS_ERROR` when it
 would overflow. `sum` is not checked; it would take about 2^32 samples.
@@ -108,7 +108,8 @@ would overflow. `sum` is not checked; it would take about 2^32 samples.
 ## 7. Synthesis
 
 `yosys -s scripts/synth.ys` (Yosys 0.33, generic `synth`, no technology
-mapping), SMACC only:
+mapping), SMACC only. Measured on the 8-bit-field design, before the
+32-bit READ change; needs re-running:
 
 | Module           | Cells      |
 |------------------|------------|
