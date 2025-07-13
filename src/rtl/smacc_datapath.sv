@@ -6,6 +6,9 @@
 //   S4  variance = mean_sq - avg_sq (floored at 0)
 //   S5  stddev = isqrt(variance), results registered
 //
+// All three results are full 32-bit values; smacc_top gates them to 0
+// outside ST_DONE.
+//
 // S1 captures on dp_start and S2-S4 free-run behind it; the valid bits only
 // track where the STOP is. dp_done pulses when S5 is written, and smacc_top
 // holds the CPU on pcpi_wait until then. Only one STOP is ever in flight.
@@ -20,7 +23,6 @@ module smacc_datapath (
     input  logic                rst,            // synchronous, active-high
 
     input  logic                dp_start,       // one-cycle pulse from smacc_ctrl
-    input  logic                dp_clear,       // START: zero the result registers
 
     input  logic [DATA_W-1:0]   min_out,
     input  logic [DATA_W-1:0]   max_out,
@@ -28,21 +30,21 @@ module smacc_datapath (
     input  logic [ACCUM_W-1:0]  sum_out,
     input  logic [ACCUM_W-1:0]  sum_of_sq_out,
 
-    output logic [DATA_W-1:0]   dp_avg,     // full width; smacc_top saturates it
-    output logic [FIELD_W-1:0]  dp_stddev,
-    output logic [FIELD_W-1:0]  dp_delta,
+    output logic [DATA_W-1:0]   dp_avg,
+    output logic [DATA_W-1:0]   dp_stddev,
+    output logic [DATA_W-1:0]   dp_delta,
     output logic                dp_done
 );
 
-    // 32-bit radicand -> 16-bit root. Samples are 8-bit sensor data, so the
-    // variance fits comfortably in 32 bits.
-    function automatic logic [15:0] isqrt32(input logic [31:0] x);
-        logic [31:0] rem, root, b;
-        integer      i;
+    // 64-bit radicand -> 32-bit root, one bit per iteration. The variance of
+    // 32-bit samples is below 2^62, so the root always fits.
+    function automatic logic [DATA_W-1:0] isqrt64(input logic [ACCUM_W-1:0] x);
+        logic [ACCUM_W-1:0] rem, root, b;
+        integer             i;
         rem  = x;
         root = '0;
-        b    = 32'h4000_0000;
-        for (i = 0; i < 16; i = i + 1) begin
+        b    = {2'b01, {(ACCUM_W-2){1'b0}}};
+        for (i = 0; i < DATA_W; i = i + 1) begin
             if (rem >= (root | b)) begin
                 rem  = rem - (root | b);
                 root = (root >> 1) | b;
@@ -51,11 +53,7 @@ module smacc_datapath (
             end
             b = b >> 2;
         end
-        isqrt32 = root[15:0];
-    endfunction
-
-    function automatic logic [FIELD_W-1:0] sat8(input logic [DATA_W-1:0] x);
-        sat8 = (|x[DATA_W-1:FIELD_W]) ? {FIELD_W{1'b1}} : x[FIELD_W-1:0];
+        isqrt64 = root[DATA_W-1:0];
     endfunction
 
     // S1
@@ -73,16 +71,11 @@ module smacc_datapath (
     logic [DATA_W-1:0]   s3_avg, s3_delta;
     // S4
     logic                s4_v;
-    logic [31:0]         s4_var;
+    logic [ACCUM_W-1:0]  s4_var;
     logic [DATA_W-1:0]   s4_avg, s4_delta;
     // S5 (results)
     logic                done_r;
-    logic [DATA_W-1:0]   avg_r;
-    logic [FIELD_W-1:0]  stddev_r, delta_r;
-
-    // mean_sq - avg_sq goes negative only on garbage input; clamp to 0.
-    logic [ACCUM_W-1:0]  s3_diff;
-    assign s3_diff = s3_mean_sq - s3_avg_sq;
+    logic [DATA_W-1:0]   avg_r, stddev_r, delta_r;
 
     always_ff @(posedge clk) begin
         if (rst) begin
@@ -137,26 +130,22 @@ module smacc_datapath (
             s3_avg     <= s2_avg;
             s3_delta   <= s2_delta;
 
-            s4_var     <= s3_diff[ACCUM_W-1] ? '0 : s3_diff[31:0];
+            // mean_sq < avg_sq only after a sum_of_squares overflow
+            s4_var     <= (s3_mean_sq >= s3_avg_sq) ? (s3_mean_sq - s3_avg_sq) : '0;
             s4_avg     <= s3_avg;
             s4_delta   <= s3_delta;
         end
     end
 
-    // stddev of 8-bit samples is at most 127, so the root's low byte is it.
     always_ff @(posedge clk) begin
         if (rst) begin
             avg_r    <= '0;
             stddev_r <= '0;
             delta_r  <= '0;
-        end else if (dp_clear) begin
-            avg_r    <= '0;
-            stddev_r <= '0;
-            delta_r  <= '0;
         end else if (s4_v) begin
             avg_r    <= s4_avg;
-            stddev_r <= FIELD_W'(isqrt32(s4_var));
-            delta_r  <= sat8(s4_delta);
+            stddev_r <= isqrt64(s4_var);
+            delta_r  <= s4_delta;
         end
     end
 

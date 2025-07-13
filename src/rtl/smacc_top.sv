@@ -6,15 +6,11 @@
 // Instruction encoding:
 //   insn[6:0]   = 7'b000_1011  (RISCV_OPCODE_CUSTOM0)
 //   insn[14:12] = funct3;  funct3[1:0]: 00=START  01=DATA  10=STOP  11=READ
-//   insn[22:20] = imm[2:0] = field select for READ
+//   insn[22:20] = imm[2:0] = stat_sel for READ
 //
 // PCPI handshake: START/DATA/READ ack the cycle they are presented. A legal
 // STOP holds pcpi_wait until the datapath pipeline drains (6 cycles), then
 // acks on dp_done.
-//
-// READ returns one byte of the 64-bit output register, zero-extended:
-//   [63:56] min  [55:48] max    [47:40] avg    [39:32] count
-//   [31:24] stddev [23:16] delta [15:8] status [7:0] reserved
 
 `ifndef SMACC_TOP_SV
 `define SMACC_TOP_SV
@@ -54,17 +50,16 @@ module smacc_top (
     logic [2:0]  stat_sel;
     logic        mem_clear, mem_we_data;
     logic [7:0]  status_byte;
+    logic        results_valid;
 
     logic [DATA_W-1:0]   mem_min_out,   mem_max_out;
     logic [ACCUM_W-1:0]  mem_count_out, mem_sum_out, mem_sum_of_sq_out;
     logic                mem_overflow;
 
-    logic [DATA_W-1:0]   dp_avg;
-    logic [FIELD_W-1:0]  dp_stddev, dp_delta;
+    logic [DATA_W-1:0]   dp_avg, dp_stddev, dp_delta;
     logic                dp_done;
 
-    logic [63:0]         out_reg;
-    logic [FIELD_W-1:0]  min_field, max_field, avg_field, count_field;
+    logic [31:0]         read_result;
 
     assign is_custom0 = pcpi_valid & (pcpi_insn[6:0] == RISCV_OPCODE_CUSTOM0);
     assign is_read    = is_custom0 & (pcpi_insn[13:12] == FLV_READ);
@@ -95,16 +90,17 @@ module smacc_top (
     end
 
     smacc_ctrl u_ctrl (
-        .clk         (clk),
-        .rst         (rst),
-        .flavor      (pcpi_insn[13:12]),
-        .insn_valid  (instr_valid),
-        .dp_start    (dp_start),
-        .mem_clear   (mem_clear),
-        .mem_we_data (mem_we_data),
-        .dp_done     (dp_done),
-        .mem_overflow(mem_overflow),
-        .status_byte (status_byte)
+        .clk          (clk),
+        .rst          (rst),
+        .flavor       (pcpi_insn[13:12]),
+        .insn_valid   (instr_valid),
+        .dp_start     (dp_start),
+        .mem_clear    (mem_clear),
+        .mem_we_data  (mem_we_data),
+        .dp_done      (dp_done),
+        .mem_overflow (mem_overflow),
+        .status_byte  (status_byte),
+        .results_valid(results_valid)
     );
 
     smacc_mem u_mem (
@@ -125,7 +121,6 @@ module smacc_top (
         .clk          (clk),
         .rst          (rst),
         .dp_start     (dp_start),
-        .dp_clear     (mem_clear),
         .min_out      (mem_min_out),
         .max_out      (mem_max_out),
         .count_out    (mem_count_out),
@@ -137,28 +132,28 @@ module smacc_top (
         .dp_done      (dp_done)
     );
 
-    // Fields are 8 bits wide: min/max/count report their low byte (count
-    // wraps after 255 samples). avg comes out of the datapath full width and
-    // is clamped here.
-    assign min_field   = mem_min_out[FIELD_W-1:0];
-    assign max_field   = mem_max_out[FIELD_W-1:0];
-    assign avg_field   = (dp_avg > 32'd255) ? 8'hFF : dp_avg[FIELD_W-1:0];
-    assign count_field = mem_count_out[FIELD_W-1:0];
-
-    always_ff @(posedge clk) begin
-        if (rst) begin
-            out_reg <= '0;
-        end else begin
-            out_reg <= {min_field, max_field, avg_field, count_field,
-                        dp_stddev, dp_delta, status_byte, 8'h00};
-        end
+    // READ result mux. Derived stats read 0 outside ST_DONE so a new run
+    // never shows the previous run's results.
+    always_comb begin
+        case (stat_sel)
+            STAT_MIN:    read_result = (mem_count_out == '0) ? '0 : mem_min_out;
+            STAT_MAX:    read_result = mem_max_out;
+            STAT_AVG:    read_result = results_valid ? dp_avg : '0;
+            STAT_COUNT:  read_result = (|mem_count_out[ACCUM_W-1:DATA_W])
+                                       ? {DATA_W{1'b1}}
+                                       : mem_count_out[DATA_W-1:0];
+            STAT_STDDEV: read_result = results_valid ? dp_stddev : '0;
+            STAT_DELTA:  read_result = results_valid ? dp_delta : '0;
+            STAT_STATUS: read_result = {24'b0, status_byte};
+            default:     read_result = '0;
+        endcase
     end
 
     assign pcpi_wait  = dp_start | stop_wait_r;
     assign pcpi_ready = (instr_valid & ~dp_start) | (stop_wait_r & dp_done);
 
     assign pcpi_wr = is_read & instr_valid;
-    assign pcpi_rd = {24'b0, out_reg[(7 - stat_sel) * 8 +: 8]};
+    assign pcpi_rd = read_result;
 
     // -------------------------------------------------------------------
     // Assertions

@@ -16,7 +16,7 @@ picks the operation (see [docs/ISA_SPEC.md](docs/ISA_SPEC.md)):
 - START (ID 0): Clear all statistics, go to READY
 - DATA  (ID 1): Submit one sample from `rs1`
 - STOP  (ID 2): Compute avg/stddev/delta; the CPU stalls until done
-- READ  (ID 3): Read one 8-bit field of the output register into `rd`
+- READ  (ID 3): Read one 32-bit statistic, selected by `imm[2:0]`, into `rd`
 
 ## Statistics Calculated
 
@@ -34,7 +34,7 @@ picks the operation (see [docs/ISA_SPEC.md](docs/ISA_SPEC.md)):
 1. START → min=0xFFFF_FFFF, max/count/sum/sum_of_squares=0, state READY
 2. DATA (per sample) → min/max/count/sum/sum_of_squares update in one cycle
 3. STOP → CPU stalls on `pcpi_wait` while the datapath pipeline runs
-4. READ → returns one byte of the output register
+4. READ → returns the selected statistic; avg/stddev/delta read 0 until DONE
 
 ## Implementation Modules
 
@@ -43,7 +43,7 @@ picks the operation (see [docs/ISA_SPEC.md](docs/ISA_SPEC.md)):
   status byte
 - smacc_mem.sv: accumulator registers, updated on DATA
 - smacc_datapath.sv: 5-stage pipeline for avg/stddev/delta
-- smacc_top.sv: PCPI decode, STOP stall, 64-bit output register
+- smacc_top.sv: PCPI decode, STOP stall, READ result mux
 
 ## Key Design Decisions
 
@@ -51,7 +51,8 @@ picks the operation (see [docs/ISA_SPEC.md](docs/ISA_SPEC.md)):
    extension, no changes to the core, one instruction per sample.
 2. 64-bit accumulators: sum and sum_of_squares of 32-bit samples need
    the extra headroom.
-3. 8-bit output fields: the course sensors produce 8-bit data, so one
-   64-bit register holds every statistic.
+3. 32-bit results: every statistic comes back at the width of a RISC-V
+   register. (v1 packed 8-bit fields into one 64-bit register, which was
+   fine for the course's 8-bit sensor data and nothing else.)
 4. Pipelined datapath: the divides, the multiply, and the square root
    each get their own stage so no single stage is too long.

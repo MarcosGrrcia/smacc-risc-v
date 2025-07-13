@@ -39,7 +39,7 @@ Needs [Verilator](https://verilator.org) 5.x.
 ./scripts/run_tests.sh --wave    # also writes smacc_tb.vcd
 ```
 
-The testbench drives the PCPI bus directly and runs 7 tests (35 checks)
+The testbench drives the PCPI bus directly and runs 8 tests (44 checks)
 against hand-computed results.
 
 ## Limitations

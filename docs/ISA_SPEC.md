@@ -1,7 +1,11 @@
 # SMACC ISA Specification
 
 **Statistical Math Accelerator: Custom RISC-V Extension**
-Version 1.0
+Version 2.0 (draft)
+
+Changes from v1.0: READ returns full 32-bit statistics; the packed 64-bit
+output register and its 8-bit fields are gone. Instruction encodings are
+unchanged.
 
 ---
 
@@ -11,7 +15,7 @@ Version 1.0
 2. [Opcode Summary](#2-opcode-summary)
 3. [Bit-Level Encodings](#3-bit-level-encodings)
 4. [Instruction Behavior](#4-instruction-behavior)
-5. [Output Register and Status Flags](#5-output-register-and-status-flags)
+5. [Statistics and Status Flags](#5-statistics-and-status-flags)
 6. [State Machine](#6-state-machine)
 7. [Example Instruction Sequences](#7-example-instruction-sequences)
 8. [Timing](#8-timing)
@@ -41,7 +45,7 @@ field (`bits[14:12]`).
 | `rd`     | [11:7]  |   5   | Destination register (READ only)  |
 | `funct3` | [14:12] |   3   | SMACC ID                          |
 | `rs1`    | [19:15] |   5   | Source register (DATA only)       |
-| `imm`    | [31:20] |  12   | Immediate (READ field select)     |
+| `imm`    | [31:20] |  12   | Immediate (READ stat select)      |
 
 ---
 
@@ -52,7 +56,7 @@ field (`bits[14:12]`).
 | `START`  | 0        | `3'b000` | R-type | Initialize all statistics, set READY             |
 | `DATA`   | 1        | `3'b001` | I-type | Submit one sample, update running stats          |
 | `STOP`   | 2        | `3'b010` | R-type | Compute avg/stddev/delta; CPU stalls until done  |
-| `READ`   | 3        | `3'b011` | I-type | Read one 8-bit field of the output register      |
+| `READ`   | 3        | `3'b011` | I-type | Read a selected 32-bit statistic into `rd`       |
 
 Only `funct3[1:0]` is decoded; `funct3[2]` is a don't-care (see §9).
 
@@ -106,8 +110,8 @@ Example with `rs1 = x1`: `32'h0000_900B`
 
 ### 3.4 READ (SMACC ID 3)
 
-**Format:** I-type. `imm[2:0]` selects one byte of the output register
-(§5), which is zero-extended into `rd`.
+**Format:** I-type. `imm[2:0]` selects the statistic; the full 32-bit value
+is written to `rd`.
 
 ```plaintext
  31                     20 19      15 14   12 11       7 6            0
@@ -117,18 +121,18 @@ Example with `rs1 = x1`: `32'h0000_900B`
 └─────────────────────────┴──────────┴───────┴──────────┴──────────────┘
 ```
 
-| `imm[2:0]` | Field    | Notes                                         |
-| :--------: | :------- | :-------------------------------------------- |
-| `3'b000`   | Min      | Low byte of running min; `0xFF` before DATA   |
-| `3'b001`   | Max      | Low byte of running max                       |
-| `3'b010`   | Average  | Saturates at 255; 0 until STOP completes      |
-| `3'b011`   | Count    | Low byte (wraps after 255 samples)            |
-| `3'b100`   | Stddev   | 0 until STOP completes                        |
-| `3'b101`   | Delta    | Saturates at 255; 0 until STOP completes      |
-| `3'b110`   | Status   | See §5                                        |
-| `3'b111`   | Reserved | Reads 0                                       |
+| `imm[2:0]` | Statistic    | Width  | Valid when                            |
+| :--------: | :----------- | :----: | :------------------------------------ |
+| `3'b000`   | Min          | 32-bit | After first DATA (reads 0 before)     |
+| `3'b001`   | Max          | 32-bit | After first DATA                      |
+| `3'b010`   | Average      | 32-bit | `DONE` (reads 0 otherwise)            |
+| `3'b011`   | Count        | 32-bit | Always (saturates at 2^32-1)          |
+| `3'b100`   | Stddev       | 32-bit | `DONE` (reads 0 otherwise)            |
+| `3'b101`   | Delta        | 32-bit | `DONE` (reads 0 otherwise)            |
+| `3'b110`   | Status flags | 32-bit | Always; status byte in bits [7:0]     |
+| `3'b111`   | Reserved     | --     | Reads 0                               |
 
-**Machine encoding (field = `S`, rd = x`N`):** `32'h0000_300B | (S << 20) | (N << 7)`
+**Machine encoding (stat = `S`, rd = x`N`):** `32'h0000_300B | (S << 20) | (N << 7)`
 
 Example: read Count into x2: `32'h0030_310B`
 
@@ -139,7 +143,8 @@ Example: read Count into x2: `32'h0030_310B`
 ### 4.1 START
 
 **Precondition:** Any state. Forces the FSM to `READY`, clears the
-accumulators and the avg/stddev/delta fields, and clears `STATUS_ERROR`.
+accumulators, and clears `STATUS_ERROR`. avg/stddev/delta are only visible
+in `DONE`, so leaving `DONE` hides them without clearing anything.
 
 | Register         | Reset Value     | Width  |
 | :--------------- | :-------------: | :----: |
@@ -192,28 +197,32 @@ STOP retires 6 cycles after it is issued, with the FSM in `DONE`.
 
 **Precondition:** Any state. Non-destructive.
 
-**Effect:** `rd <= {24'b0, out_reg[(7 - imm[2:0])*8 +: 8]}`
+**Effect:**
+
+```systemverilog
+case (imm[2:0])
+  3'b000: rd <= (count == 0) ? 32'h0 : min;
+  3'b001: rd <= max;
+  3'b010: rd <= done ? avg    : 32'h0;
+  3'b011: rd <= (count > 32'hFFFF_FFFF) ? 32'hFFFF_FFFF : count[31:0];
+  3'b100: rd <= done ? stddev : 32'h0;
+  3'b101: rd <= done ? delta  : 32'h0;
+  3'b110: rd <= {24'h0, status_byte};
+  3'b111: rd <= 32'h0;
+endcase
+```
+
+`done` means the FSM is in `DONE`.
 
 **Latency:** 1 cycle.
 
 ---
 
-## 5. Output Register and Status Flags
+## 5. Statistics and Status Flags
 
-SMACC keeps a 64-bit output register, refreshed every cycle, that packs
-one 8-bit field per statistic. READ returns one field.
-
-```plaintext
- 63      56 55      48 47      40 39      32 31      24 23      16 15       8 7        0
-┌──────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┬──────────┐
-│   min    │   max    │   avg    │  count   │  stddev  │  delta   │  status  │ reserved │
-└──────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┴──────────┘
-```
-
-The 8-bit fields assume 8-bit sample data, which is what the course
-platform's sensors produce. Wider samples are accumulated correctly, but
-their fields show only the low byte (min, max, count) or saturate (avg,
-delta).
+Every statistic is a full 32-bit unsigned value. The accumulators are
+64-bit, so nothing is lost for a 32-bit sample stream until the overflow
+conditions in §9.
 
 ### Status Byte
 
@@ -223,8 +232,7 @@ delta).
 | 6     | `0x40` | `STATUS_BUSY`  | STOP computation in progress                    |
 | 5     | `0x20` | `STATUS_DONE`  | STOP complete; avg, stddev, and delta are valid |
 | 4     | `0x10` | `STATUS_ERROR` | Invalid sequence or sum_of_squares overflow     |
-| 3     | --     | reserved       | 0                                               |
-| 2:0   | --     | FSM state      | Current state (debug), see §6                   |
+| 3:0   | --     | reserved       | Always `4'b0000`                                |
 
 `STATUS_BUSY` is only set while the CPU is stalled, so software never sees it.
 
@@ -316,8 +324,8 @@ dataset; it clears everything from the previous run.
 
 ### 7.4 READ During Accumulation
 
-Min, max, count, and status can be read at any time without disturbing the
-run. avg/stddev/delta read 0 until STOP completes.
+Min, max, count, and status are live and can be read at any time without
+disturbing the run. avg/stddev/delta read 0 until STOP completes.
 
 ---
 
