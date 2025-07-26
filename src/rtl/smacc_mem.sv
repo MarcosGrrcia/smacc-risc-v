@@ -30,11 +30,10 @@ module smacc_mem (
     assign data_in_ext = {{(ACCUM_W-DATA_W){1'b0}}, data_in};
     assign sq          = data_in_ext * data_in_ext;
 
-    // Only sum_of_squares can realistically overflow (two samples near
-    // 2^32 are enough); sum would need ~2^32 of them. Saturate instead of
-    // wrapping and raise the error flag.
-    logic sq_ovf;
-    assign sq_ovf = (sum_of_sq_out > (ACCUM_MAX - sq));
+    // Saturate instead of wrapping: check headroom before each add.
+    logic sum_ovf, sq_ovf;
+    assign sum_ovf = (sum_out       > (ACCUM_MAX - data_in_ext));
+    assign sq_ovf  = (sum_of_sq_out > (ACCUM_MAX - sq));
 
     always_ff @(posedge clk) begin
         if (rst || clear) begin
@@ -52,9 +51,9 @@ module smacc_mem (
                 max_out <= data_in;
             end
             count_out     <= count_out + 1;
-            sum_out       <= sum_out + data_in_ext;
-            sum_of_sq_out <= sq_ovf ? ACCUM_MAX : (sum_of_sq_out + sq);
-            if (sq_ovf) begin
+            sum_out       <= sum_ovf ? ACCUM_MAX : (sum_out + data_in_ext);
+            sum_of_sq_out <= sq_ovf  ? ACCUM_MAX : (sum_of_sq_out + sq);
+            if (sum_ovf || sq_ovf) begin
                 overflow <= 1'b1;
             end
         end

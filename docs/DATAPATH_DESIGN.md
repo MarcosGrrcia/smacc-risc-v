@@ -100,8 +100,9 @@ right after STOP returns without polling.
 64-bit output register. That only worked for 8-bit sample data, so READ
 now returns each statistic at full width through a mux instead.
 
-**Overflow.** `sum_of_squares` saturates and sets `STATUS_ERROR` when it
-would overflow. `sum` is not checked; it would take about 2^32 samples.
+**Overflow.** `sum` and `sum_of_squares` saturate and set `STATUS_ERROR`
+when an add would overflow; nothing wraps. The check is a headroom compare
+(`acc > MAX - addend`) before each add.
 
 ---
 

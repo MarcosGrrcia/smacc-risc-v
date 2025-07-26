@@ -77,6 +77,11 @@ module smacc_datapath (
     logic                done_r;
     logic [DATA_W-1:0]   avg_r, stddev_r, delta_r;
 
+    // sum/count fits 32 bits unless sum saturated, which already raised
+    // STATUS_ERROR. Clamp rather than wrap.
+    logic [ACCUM_W-1:0]  s1_quot;
+    assign s1_quot = s1_sum / s1_count;
+
     always_ff @(posedge clk) begin
         if (rst) begin
             s1_v   <= 1'b0;
@@ -120,7 +125,8 @@ module smacc_datapath (
             s4_avg     <= '0;
             s4_delta   <= '0;
         end else begin
-            s2_avg     <= DATA_W'(s1_sum / s1_count);
+            s2_avg     <= (|s1_quot[ACCUM_W-1:DATA_W]) ? {DATA_W{1'b1}}
+                                                       : s1_quot[DATA_W-1:0];
             s2_mean_sq <= s1_sum_sq / s1_count;
             s2_delta   <= s1_delta;
 

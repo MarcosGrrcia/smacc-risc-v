@@ -231,7 +231,7 @@ conditions in §9.
 | 7     | `0x80` | `STATUS_READY` | Accelerator initialized, accepting DATA         |
 | 6     | `0x40` | `STATUS_BUSY`  | STOP computation in progress                    |
 | 5     | `0x20` | `STATUS_DONE`  | STOP complete; avg, stddev, and delta are valid |
-| 4     | `0x10` | `STATUS_ERROR` | Invalid sequence or sum_of_squares overflow     |
+| 4     | `0x10` | `STATUS_ERROR` | Invalid sequence or accumulator overflow        |
 | 3:0   | --     | reserved       | Always `4'b0000`                                |
 
 `STATUS_BUSY` is only set while the CPU is stalled, so software never sees it.
@@ -346,10 +346,13 @@ disturbing the run. avg/stddev/delta read 0 until STOP completes.
 | :----------------------------------- | :----------------------------------------------- |
 | `DATA` in `IDLE` or `DONE`           | `STATUS_ERROR=1`, sample discarded               |
 | `STOP` in `IDLE`, `READY`, or `DONE` | `STATUS_ERROR=1`, state unchanged                |
+| `sum` overflow                       | `STATUS_ERROR=1`, saturates at `64'hFFFF...FFFF` |
 | `sum_of_squares` overflow            | `STATUS_ERROR=1`, saturates at `64'hFFFF...FFFF` |
 
-`sum` is not checked for overflow; it would take on the order of 2^32
-samples to overflow it.
+**Saturation, not wraparound:** no readout ever wraps. Count saturates at
+2^32-1 (without raising ERROR), and the average saturates at 2^32-1 if
+`sum` saturated. Once `STATUS_ERROR` is set the derived statistics should
+be discarded.
 
 `funct3[2]` is not decoded, so every custom-0 encoding maps to one of the
 four instructions.
