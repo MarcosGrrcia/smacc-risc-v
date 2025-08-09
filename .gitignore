@@ -1,5 +1,18 @@
-obj_dir/
-build/
+# Simulation output
 *.vcd
+*.wdb
 *.log
-.vscode/
+*.history
+
+# Tool output
+work/
+obj_dir/
+sim_build/
+build/
+
+# Editor / OS
+.vscode/settings.json
+*.swp
+*.swo
+Thumbs.db
+.DS_Store
