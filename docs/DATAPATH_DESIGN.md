@@ -109,20 +109,24 @@ when an add would overflow; nothing wraps. The check is a headroom compare
 ## 7. Synthesis
 
 `yosys -s scripts/synth.ys` (Yosys 0.33, generic `synth`, no technology
-mapping), SMACC only. Measured on the 8-bit-field design, before the
-32-bit READ change; needs re-running:
+mapping), SMACC only:
 
-| Module           | Cells      |
-|------------------|------------|
-| smacc_datapath   | 70,039     |
-| smacc_mem        | 7,592      |
-| smacc_top        | 165        |
-| smacc_ctrl       | 54         |
-| **Total**        | **77,847** |
+| Module           | v1 (8-bit fields) | 32-bit READ |
+|------------------|-------------------|-------------|
+| smacc_datapath   | 70,039            | 75,855      |
+| smacc_mem        | 7,592             | 7,896       |
+| smacc_top        | 165               | 663         |
+| smacc_ctrl       | 54                | 49          |
+| **Total**        | **77,847**        | **84,460**  |
+| Flip-flops       | 1,010             | 1,036       |
 
-1,010 flip-flops, all with synchronous reset. No inferred latches.
+All flops have synchronous reset; no inferred latches in either.
 
-Nearly all of it is the datapath, and nearly all of the datapath is the two
-64/64 combinational dividers in S2 (~31 K cells each when synthesized on
-their own). They are also by far the longest path in the design: 64
-dependent subtract/compare steps in a single cycle.
+The 32-bit change costs ~6.6 K cells: the full 64-bit isqrt and 32-bit
+result registers in the datapath, the READ mux in top, and the sum overflow
+check in mem. The two 64/64 combinational dividers in S2 (~31 K cells each
+when synthesized on their own) are still most of the design, and by far the
+longest path: 64 dependent subtract/compare steps in a single cycle.
+
+Only one STOP is ever in flight, so the pipeline registers aren't buying
+any throughput either.
