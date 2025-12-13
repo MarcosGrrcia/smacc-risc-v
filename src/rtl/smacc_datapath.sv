@@ -9,9 +9,11 @@
 // All three results are full 32-bit values; smacc_top gates them to 0
 // outside ST_DONE.
 //
-// S1 captures on dp_start and S2-S4 free-run behind it; the valid bits only
-// track where the STOP is. dp_done pulses when S5 is written, and smacc_top
-// holds the CPU on pcpi_wait until then. Only one STOP is ever in flight.
+// S1 captures on dp_start_final and S2-S4 free-run behind it; the valid bits
+// only track where the STOP is. dp_done pulses when S5 is written. The CPU
+// is not stalled: it polls STATUS_DONE. dp_abort (START mid-flight) clears
+// the valid bits so the aborted run never raises dp_done. Only one STOP is
+// ever in flight.
 
 `ifndef SMACC_DATAPATH_SV
 `define SMACC_DATAPATH_SV
@@ -22,7 +24,8 @@ module smacc_datapath (
     input  logic                clk,
     input  logic                rst,            // synchronous, active-high
 
-    input  logic                dp_start,       // one-cycle pulse from smacc_ctrl
+    input  logic                dp_start_final, // one-cycle pulse: snapshot mem, start
+    input  logic                dp_abort,       // one-cycle pulse: cancel in-flight run
 
     input  logic [DATA_W-1:0]   min_out,
     input  logic [DATA_W-1:0]   max_out,
@@ -89,8 +92,14 @@ module smacc_datapath (
             s3_v   <= 1'b0;
             s4_v   <= 1'b0;
             done_r <= 1'b0;
+        end else if (dp_abort) begin
+            s1_v   <= 1'b0;
+            s2_v   <= 1'b0;
+            s3_v   <= 1'b0;
+            s4_v   <= 1'b0;
+            done_r <= 1'b0;
         end else begin
-            s1_v   <= dp_start;
+            s1_v   <= dp_start_final;
             s2_v   <= s1_v;
             s3_v   <= s2_v;
             s4_v   <= s3_v;
@@ -104,7 +113,7 @@ module smacc_datapath (
             s1_sum    <= '0;
             s1_sum_sq <= '0;
             s1_delta  <= '0;
-        end else if (dp_start) begin
+        end else if (dp_start_final) begin
             s1_count  <= count_out;
             s1_sum    <= sum_out;
             s1_sum_sq <= sum_of_sq_out;

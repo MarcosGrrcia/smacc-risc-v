@@ -80,8 +80,8 @@ module smacc_tb;
     // ----------------------------------------------------------------
 
     // Drive one instruction and sample pcpi_rd on the acknowledge edge.
-    // START/DATA/READ ack the cycle they are presented; a legal STOP holds
-    // pcpi_wait until the datapath is done, so wait (bounded) for ready.
+    // Every SMACC op (including STOP) acks the cycle it is presented, so
+    // one task covers all four instructions.
     task automatic issue(
         input  logic [31:0] insn,
         input  logic [31:0] rs1,
@@ -92,15 +92,22 @@ module smacc_tb;
         pcpi_insn  = insn;
         pcpi_rs1   = rs1;
         @(posedge clk);
-        repeat (16) begin
-            if (pcpi_ready) break;
-            @(posedge clk);
-        end
         if (!pcpi_ready)
             $fatal(1, "pcpi_ready not asserted (cycle %0d)", cycles);
         rd = pcpi_rd;
         #1;
         pcpi_valid = 1'b0;
+    endtask
+
+    // STOP returns immediately; software polls STATUS_DONE.
+    // 200 polls is far more than finalization takes.
+    task automatic poll_done;
+        logic [31:0] st;
+        repeat (200) begin
+            issue(insn_read(STAT_STATUS), '0, st);
+            if ((st & F_DONE) != 0) return;
+        end
+        $fatal(1, "STATUS_DONE never set (cycle %0d)", cycles);
     endtask
 
     task automatic check(
@@ -121,13 +128,14 @@ module smacc_tb;
         #1; rst = 1'b0;
     endtask
 
-    // STOP the current run and check all six statistics.
+    // Finalize the current run and check all six statistics.
     task automatic expect_stats(
         input string tag,
         input logic [31:0] e_min, e_max, e_count, e_avg, e_stddev, e_delta
     );
         logic [31:0] rd;
         issue(INSN_STOP, '0, rd);
+        poll_done();
         issue(insn_read(STAT_MIN),    '0, rd);  check({tag, " min"},    rd, e_min);
         issue(insn_read(STAT_MAX),    '0, rd);  check({tag, " max"},    rd, e_max);
         issue(insn_read(STAT_COUNT),  '0, rd);  check({tag, " count"},  rd, e_count);
@@ -144,7 +152,7 @@ module smacc_tb;
 
         // T1 -- Samples 5..50: sum=275, avg=27, variance=962-27^2=233,
         //       stddev=isqrt(233)=15. Also checks running stats mid-run and
-        //       that avg reads 0 until STOP completes.
+        //       that avg reads 0 until finalization completes.
         $display("\n-- T1: full run, 10 samples --");
         reset_dut();
         issue(INSN_START, '0, rd);
@@ -155,7 +163,7 @@ module smacc_tb;
         expect_stats("T1", 5, 50, 10, 27, 15, 45);
 
         // T2 -- STOP outside ACCUMULATE sets the sticky error flag
-        //       (ISA_SPEC.md section 9) and acks without stalling.
+        //       (ISA_SPEC.md section 9); READY remains set alongside it.
         $display("\n-- T2: illegal STOP --");
         reset_dut();
         issue(INSN_START, '0, rd);
@@ -206,6 +214,7 @@ module smacc_tb;
         issue(INSN_START, '0, rd);
         for (int i = 1; i <= 3; i++) issue(INSN_DATA, i, rd);
         issue(INSN_STOP, '0, rd);
+        poll_done();
         issue(INSN_START, '0, rd);
         for (int i = 1; i <= 3; i++) issue(INSN_DATA, i * 10, rd);
         expect_stats("T7", 10, 30, 3, 20, 8, 20);
