@@ -100,7 +100,7 @@ module smacc_tb;
     endtask
 
     // STOP returns immediately; software polls STATUS_DONE.
-    // 200 polls is far more than finalization takes.
+    // Finalization is fixed at 162 cycles, so 200 polls is ample.
     task automatic poll_done;
         logic [31:0] st;
         repeat (200) begin
@@ -246,9 +246,9 @@ module smacc_tb;
     end
 `endif
 
-    // Watchdog: every test finishes in well under 100 cycles.
+    // Watchdog: 8 tests x at most ~600 cycles each, with margin.
     initial begin
-        #20_000;
+        #60_000;
         $fatal(1, "Watchdog timeout at %0t ns", $time);
     end
 

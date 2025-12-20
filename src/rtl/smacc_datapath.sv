@@ -1,19 +1,19 @@
-// smacc_datapath.sv: 5-stage pipeline that computes the derived statistics.
+// smacc_datapath.sv: Sequential statistics finalization engine for SMACC.
 //
-//   S1  snapshot accumulators, delta = max - min
-//   S2  avg = sum / count, mean_sq = sum_of_squares / count
-//   S3  avg_sq = avg * avg
-//   S4  variance = mean_sq - avg_sq (floored at 0)
-//   S5  stddev = isqrt(variance), results registered
+// On STOP, computes the derived statistics (min/max/count come straight
+// from smacc_mem instead):
+//   avg    = sum / count                  (restoring divide, 64 cycles)
+//   stddev = isqrt(sum_sq/count - avg^2)  (second divide + 32-cycle isqrt)
+//   delta  = max - min                    (subtract at load)
 //
-// All three results are full 32-bit values; smacc_top gates them to 0
-// outside ST_DONE.
+// Fixed 162-cycle latency: 1 load + 64 + 64 divide + 1 variance + 32 isqrt.
+// One divider is shared across both divides. avg^2 is still a plain 32x32
+// multiply in the variance step. The CPU is not stalled; it polls
+// STATUS_DONE.
 //
-// S1 captures on dp_start_final and S2-S4 free-run behind it; the valid bits
-// only track where the STOP is. dp_done pulses when S5 is written. The CPU
-// is not stalled: it polls STATUS_DONE. dp_abort (START mid-flight) clears
-// the valid bits so the aborted run never raises dp_done. Only one STOP is
-// ever in flight.
+// Results hold after dp_done and are exposed by smacc_top only in ST_DONE,
+// so partial values are never visible. All three fit 32 bits; avg saturates
+// at 2^32-1 on the sum-overflow error path rather than wrapping.
 
 `ifndef SMACC_DATAPATH_SV
 `define SMACC_DATAPATH_SV
@@ -24,7 +24,7 @@ module smacc_datapath (
     input  logic                clk,
     input  logic                rst,            // synchronous, active-high
 
-    input  logic                dp_start_final, // one-cycle pulse: snapshot mem, start
+    input  logic                dp_start_final, // one-cycle pulse: snapshot mem, start engine
     input  logic                dp_abort,       // one-cycle pulse: cancel in-flight run
 
     input  logic [DATA_W-1:0]   min_out,
@@ -36,131 +36,147 @@ module smacc_datapath (
     output logic [DATA_W-1:0]   dp_avg,
     output logic [DATA_W-1:0]   dp_stddev,
     output logic [DATA_W-1:0]   dp_delta,
-    output logic                dp_done
+    output logic                dp_done         // one-cycle pulse: results committed
 );
 
-    // 64-bit radicand -> 32-bit root, one bit per iteration. The variance of
-    // 32-bit samples is below 2^62, so the root always fits.
-    function automatic logic [DATA_W-1:0] isqrt64(input logic [ACCUM_W-1:0] x);
-        logic [ACCUM_W-1:0] rem, root, b;
-        integer             i;
-        rem  = x;
-        root = '0;
-        b    = {2'b01, {(ACCUM_W-2){1'b0}}};
-        for (i = 0; i < DATA_W; i = i + 1) begin
-            if (rem >= (root | b)) begin
-                rem  = rem - (root | b);
-                root = (root >> 1) | b;
-            end else begin
-                root = root >> 1;
-            end
-            b = b >> 2;
-        end
-        isqrt64 = root[DATA_W-1:0];
-    endfunction
+    typedef enum logic [2:0] {
+        D_IDLE = 3'd0,
+        D_DIV1 = 3'd1,  // avg     = sum / count
+        D_DIV2 = 3'd2,  // mean_sq = sum_of_squares / count
+        D_VAR  = 3'd3,  // variance = mean_sq - avg^2 (floored to 0)
+        D_SQRT = 3'd4   // stddev  = isqrt(variance)
+    } dp_fsm_e;
 
-    // S1
-    logic                s1_v;
-    logic [ACCUM_W-1:0]  s1_count, s1_sum, s1_sum_sq;
-    logic [DATA_W-1:0]   s1_delta;
-    // S2
-    logic                s2_v;
-    logic [DATA_W-1:0]   s2_avg;
-    logic [ACCUM_W-1:0]  s2_mean_sq;
-    logic [DATA_W-1:0]   s2_delta;
-    // S3
-    logic                s3_v;
-    logic [ACCUM_W-1:0]  s3_avg_sq, s3_mean_sq;
-    logic [DATA_W-1:0]   s3_avg, s3_delta;
-    // S4
-    logic                s4_v;
-    logic [ACCUM_W-1:0]  s4_var;
-    logic [DATA_W-1:0]   s4_avg, s4_delta;
-    // S5 (results)
-    logic                done_r;
-    logic [DATA_W-1:0]   avg_r, stddev_r, delta_r;
+    dp_fsm_e            dstate_r;
+    logic [5:0]         step_r;      // divide: 0..63, isqrt: 0..31
 
-    // sum/count fits 32 bits unless sum saturated, which already raised
-    // STATUS_ERROR. Clamp rather than wrap.
-    logic [ACCUM_W-1:0]  s1_quot;
-    assign s1_quot = s1_sum / s1_count;
+    // Shared restoring divider. Invariant div_rem_r < div_den_r keeps the
+    // partial remainder within ACCUM_W bits after each subtract.
+    logic [ACCUM_W-1:0] div_quo_r, div_rem_r, div_den_r;
+    logic [ACCUM_W-1:0] f_sum_sq_r;  // dividend for the second divide
+    logic [ACCUM_W-1:0] mean_sq_r;
+
+    // Bit-serial restoring isqrt, one result bit per cycle. sq_root_r's set
+    // bits stay above sq_b_r, so (sq_root_r | sq_b_r) == sq_root_r + sq_b_r.
+    logic [ACCUM_W-1:0] sq_rem_r, sq_root_r, sq_b_r;
+
+    logic [DATA_W-1:0]  avg_r, stddev_r, delta_r;
+    logic               done_r;
+
+    // Divider step (combinational, so the last iteration commits same-cycle).
+    logic [ACCUM_W:0]   div_shift;
+    logic               div_ge;
+    logic [ACCUM_W-1:0] div_rem_nx, div_quo_nx;
+
+    assign div_shift  = {div_rem_r, div_quo_r[ACCUM_W-1]};
+    assign div_ge     = (div_shift >= {1'b0, div_den_r});
+    assign div_rem_nx = div_ge ? (div_shift[ACCUM_W-1:0] - div_den_r)
+                               : div_shift[ACCUM_W-1:0];
+    assign div_quo_nx = {div_quo_r[ACCUM_W-2:0], div_ge};
+
+    // isqrt step
+    logic [ACCUM_W-1:0] sq_try;
+    logic               sq_ge;
+    logic [ACCUM_W-1:0] sq_root_nx;
+
+    assign sq_try     = sq_root_r | sq_b_r;
+    assign sq_ge      = (sq_rem_r >= sq_try);
+    assign sq_root_nx = sq_ge ? ((sq_root_r >> 1) | sq_b_r) : (sq_root_r >> 1);
+
+    logic [ACCUM_W-1:0] avg_sq;
+    assign avg_sq = {{(ACCUM_W-DATA_W){1'b0}}, avg_r}
+                  * {{(ACCUM_W-DATA_W){1'b0}}, avg_r};
 
     always_ff @(posedge clk) begin
         if (rst) begin
-            s1_v   <= 1'b0;
-            s2_v   <= 1'b0;
-            s3_v   <= 1'b0;
-            s4_v   <= 1'b0;
-            done_r <= 1'b0;
+            dstate_r   <= D_IDLE;
+            step_r     <= '0;
+            done_r     <= 1'b0;
+            div_quo_r  <= '0;
+            div_rem_r  <= '0;
+            div_den_r  <= '0;
+            f_sum_sq_r <= '0;
+            mean_sq_r  <= '0;
+            sq_rem_r   <= '0;
+            sq_root_r  <= '0;
+            sq_b_r     <= '0;
+            avg_r      <= '0;
+            stddev_r   <= '0;
+            delta_r    <= '0;
         end else if (dp_abort) begin
-            s1_v   <= 1'b0;
-            s2_v   <= 1'b0;
-            s3_v   <= 1'b0;
-            s4_v   <= 1'b0;
-            done_r <= 1'b0;
+            // Only idle the engine; stale data regs are safe because
+            // smacc_top exposes results in ST_DONE, unreachable after abort.
+            dstate_r <= D_IDLE;
+            done_r   <= 1'b0;
         end else begin
-            s1_v   <= dp_start_final;
-            s2_v   <= s1_v;
-            s3_v   <= s2_v;
-            s4_v   <= s3_v;
-            done_r <= s4_v;
-        end
-    end
+            done_r <= 1'b0;  // dp_done is a one-cycle pulse
 
-    always_ff @(posedge clk) begin
-        if (rst) begin
-            s1_count  <= '0;
-            s1_sum    <= '0;
-            s1_sum_sq <= '0;
-            s1_delta  <= '0;
-        end else if (dp_start_final) begin
-            s1_count  <= count_out;
-            s1_sum    <= sum_out;
-            s1_sum_sq <= sum_of_sq_out;
-            s1_delta  <= max_out - min_out;
-        end
-    end
+            case (dstate_r)
+                D_IDLE: begin
+                    if (dp_start_final) begin
+                        // ctrl only finalizes from ST_ACCUMULATE, so count >= 1
+                        // and min <= max; the delta guard is defensive only.
+                        delta_r    <= (max_out >= min_out) ? (max_out - min_out) : '0;
+                        div_den_r  <= count_out;
+                        div_quo_r  <= sum_out;
+                        div_rem_r  <= '0;
+                        f_sum_sq_r <= sum_of_sq_out;
+                        step_r     <= '0;
+                        dstate_r   <= D_DIV1;
+                    end
+                end
 
-    always_ff @(posedge clk) begin
-        if (rst) begin
-            s2_avg     <= '0;
-            s2_mean_sq <= '0;
-            s2_delta   <= '0;
-            s3_avg_sq  <= '0;
-            s3_mean_sq <= '0;
-            s3_avg     <= '0;
-            s3_delta   <= '0;
-            s4_var     <= '0;
-            s4_avg     <= '0;
-            s4_delta   <= '0;
-        end else begin
-            s2_avg     <= (|s1_quot[ACCUM_W-1:DATA_W]) ? {DATA_W{1'b1}}
-                                                       : s1_quot[DATA_W-1:0];
-            s2_mean_sq <= s1_sum_sq / s1_count;
-            s2_delta   <= s1_delta;
+                // Both divides share the same per-cycle step; only the
+                // commit on the final (64th) iteration differs.
+                D_DIV1, D_DIV2: begin
+                    if (step_r == 6'd63) begin
+                        step_r <= '0;
+                        if (dstate_r == D_DIV1) begin
+                            // avg fits 32 bits unless sum saturated; clamp then.
+                            avg_r     <= (|div_quo_nx[ACCUM_W-1:DATA_W])
+                                         ? {DATA_W{1'b1}}
+                                         : div_quo_nx[DATA_W-1:0];
+                            div_quo_r <= f_sum_sq_r;
+                            div_rem_r <= '0;
+                            dstate_r  <= D_DIV2;
+                        end else begin
+                            mean_sq_r <= div_quo_nx;
+                            dstate_r  <= D_VAR;
+                        end
+                    end else begin
+                        div_rem_r <= div_rem_nx;
+                        div_quo_r <= div_quo_nx;
+                        step_r    <= step_r + 6'd1;
+                    end
+                end
 
-            s3_avg_sq  <= {{(ACCUM_W-DATA_W){1'b0}}, s2_avg}
-                        * {{(ACCUM_W-DATA_W){1'b0}}, s2_avg};
-            s3_mean_sq <= s2_mean_sq;
-            s3_avg     <= s2_avg;
-            s3_delta   <= s2_delta;
+                D_VAR: begin
+                    // Floor variance at 0 (mean_sq < avg^2 only after a
+                    // sum_of_squares overflow upstream).
+                    sq_rem_r  <= (mean_sq_r >= avg_sq) ? (mean_sq_r - avg_sq) : '0;
+                    sq_root_r <= '0;
+                    sq_b_r    <= {2'b01, {(ACCUM_W-2){1'b0}}};  // 1 << 62
+                    step_r    <= '0;
+                    dstate_r  <= D_SQRT;
+                end
 
-            // mean_sq < avg_sq only after a sum_of_squares overflow
-            s4_var     <= (s3_mean_sq >= s3_avg_sq) ? (s3_mean_sq - s3_avg_sq) : '0;
-            s4_avg     <= s3_avg;
-            s4_delta   <= s3_delta;
-        end
-    end
+                D_SQRT: begin
+                    if (step_r == 6'd31) begin
+                        stddev_r <= sq_root_nx[DATA_W-1:0];
+                        done_r   <= 1'b1;
+                        dstate_r <= D_IDLE;
+                    end else begin
+                        sq_rem_r  <= sq_ge ? (sq_rem_r - sq_try) : sq_rem_r;
+                        sq_root_r <= sq_root_nx;
+                        sq_b_r    <= sq_b_r >> 2;
+                        step_r    <= step_r + 6'd1;
+                    end
+                end
 
-    always_ff @(posedge clk) begin
-        if (rst) begin
-            avg_r    <= '0;
-            stddev_r <= '0;
-            delta_r  <= '0;
-        end else if (s4_v) begin
-            avg_r    <= s4_avg;
-            stddev_r <= isqrt64(s4_var);
-            delta_r  <= s4_delta;
+                default: begin
+                    dstate_r <= D_IDLE;
+                end
+            endcase
         end
     end
 

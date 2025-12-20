@@ -9,8 +9,8 @@
 //   insn[22:20] = imm[2:0] = stat_sel for READ
 //
 // PCPI handshake: every instruction acks the cycle it is presented
-// (pcpi_wait tied low). STOP starts the datapath in the background;
-// software polls STATUS_DONE.
+// (pcpi_wait tied low). STOP launches the 162-cycle engine in the
+// background; software polls STATUS_DONE.
 //
 // READ returns full 32-bit values: min/max/count from smacc_mem,
 // avg/stddev/delta from smacc_datapath (gated to 0 unless ST_DONE).
