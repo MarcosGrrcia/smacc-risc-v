@@ -185,6 +185,38 @@ module smacc_datapath (
     assign dp_delta  = delta_r;
     assign dp_done   = done_r;
 
+    // -------------------------------------------------------------------
+    // Assertions
+    // -------------------------------------------------------------------
+`ifdef SMACC_ASSERT
+
+    ast_dp_min_le_max: assert property (
+        @(posedge clk) disable iff (rst)
+        (count_out > '0) |-> (min_out <= max_out)
+    ) else $error("[smacc_datapath] min_out > max_out while count_out > 0");
+
+    ast_dp_done_single_cycle: assert property (
+        @(posedge clk) disable iff (rst)
+        dp_done |=> !dp_done
+    ) else $error("[smacc_datapath] dp_done held for more than one cycle");
+
+    ast_dp_abort_flushes: assert property (
+        @(posedge clk) disable iff (rst)
+        dp_abort |=> (dstate_r == D_IDLE && !dp_done)
+    ) else $error("[smacc_datapath] engine not idled after dp_abort");
+
+    ast_dp_start_nonzero_count: assert property (
+        @(posedge clk) disable iff (rst)
+        (dp_start_final && dstate_r == D_IDLE) |-> (count_out != '0)
+    ) else $error("[smacc_datapath] finalization started with count == 0");
+
+    ast_dp_rem_lt_den: assert property (
+        @(posedge clk) disable iff (rst)
+        (dstate_r == D_DIV1 || dstate_r == D_DIV2) |-> (div_rem_r < div_den_r)
+    ) else $error("[smacc_datapath] divider invariant rem < den violated");
+
+`endif // SMACC_ASSERT
+
 endmodule: smacc_datapath
 
 `endif // SMACC_DATAPATH_SV
