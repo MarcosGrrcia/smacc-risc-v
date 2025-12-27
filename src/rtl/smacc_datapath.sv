@@ -7,9 +7,9 @@
 //   delta  = max - min                    (subtract at load)
 //
 // Fixed 162-cycle latency: 1 load + 64 + 64 divide + 1 variance + 32 isqrt.
-// One divider is shared across both divides. avg^2 is still a plain 32x32
-// multiply in the variance step. The CPU is not stalled; it polls
-// STATUS_DONE.
+// One divider is shared across both divides, and avg^2 is squared
+// bit-serially during the second divide (which doesn't read avg), so no
+// multiplier is needed here. The CPU is not stalled; it polls STATUS_DONE.
 //
 // Results hold after dp_done and are exposed by smacc_top only in ST_DONE,
 // so partial values are never visible. All three fit 32 bits; avg saturates
@@ -60,6 +60,7 @@ module smacc_datapath (
     // bits stay above sq_b_r, so (sq_root_r | sq_b_r) == sq_root_r + sq_b_r.
     logic [ACCUM_W-1:0] sq_rem_r, sq_root_r, sq_b_r;
 
+    logic [ACCUM_W-1:0] avg_sq_r;   // bit-serial avg^2, built during D_DIV2
     logic [DATA_W-1:0]  avg_r, stddev_r, delta_r;
     logic               done_r;
 
@@ -83,9 +84,14 @@ module smacc_datapath (
     assign sq_ge      = (sq_rem_r >= sq_try);
     assign sq_root_nx = sq_ge ? ((sq_root_r >> 1) | sq_b_r) : (sq_root_r >> 1);
 
-    logic [ACCUM_W-1:0] avg_sq;
-    assign avg_sq = {{(ACCUM_W-DATA_W){1'b0}}, avg_r}
-                  * {{(ACCUM_W-DATA_W){1'b0}}, avg_r};
+    // Squaring step, MSB-first: acc <- 2*acc + (avg[31-k] ? avg : 0).
+    // One 64-bit adder in place of a 32x32 multiplier.
+    logic               mul_bit;
+    logic [ACCUM_W-1:0] mul_nx;
+
+    assign mul_bit = avg_r[5'd31 - step_r[4:0]];
+    assign mul_nx  = (avg_sq_r << 1)
+                   + (mul_bit ? {{(ACCUM_W-DATA_W){1'b0}}, avg_r} : '0);
 
     always_ff @(posedge clk) begin
         if (rst) begin
@@ -100,6 +106,7 @@ module smacc_datapath (
             sq_rem_r   <= '0;
             sq_root_r  <= '0;
             sq_b_r     <= '0;
+            avg_sq_r   <= '0;
             avg_r      <= '0;
             stddev_r   <= '0;
             delta_r    <= '0;
@@ -136,6 +143,7 @@ module smacc_datapath (
                             avg_r     <= (|div_quo_nx[ACCUM_W-1:DATA_W])
                                          ? {DATA_W{1'b1}}
                                          : div_quo_nx[DATA_W-1:0];
+                            avg_sq_r  <= '0;  // arm the overlapped squarer
                             div_quo_r <= f_sum_sq_r;
                             div_rem_r <= '0;
                             dstate_r  <= D_DIV2;
@@ -148,12 +156,17 @@ module smacc_datapath (
                         div_quo_r <= div_quo_nx;
                         step_r    <= step_r + 6'd1;
                     end
+
+                    // Build avg^2 in parallel during DIV2's first 32 cycles.
+                    if (dstate_r == D_DIV2 && step_r < 6'd32) begin
+                        avg_sq_r <= mul_nx;
+                    end
                 end
 
                 D_VAR: begin
                     // Floor variance at 0 (mean_sq < avg^2 only after a
                     // sum_of_squares overflow upstream).
-                    sq_rem_r  <= (mean_sq_r >= avg_sq) ? (mean_sq_r - avg_sq) : '0;
+                    sq_rem_r  <= (mean_sq_r >= avg_sq_r) ? (mean_sq_r - avg_sq_r) : '0;
                     sq_root_r <= '0;
                     sq_b_r    <= {2'b01, {(ACCUM_W-2){1'b0}}};  // 1 << 62
                     step_r    <= '0;
