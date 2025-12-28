@@ -215,7 +215,8 @@ module smacc_ctrl (
         (state_r == ST_DONE) ##[1:$] (state_r == ST_READY) ##[1:$] (state_r == ST_ACCUMULATE)
     );
 
-    // Reachable now that STOP is non-stalling: the CPU can START mid-finalize.
+    // Reachable because STOP is non-stalling: the CPU can START mid-finalize
+    // (smacc_tb T9).
     cov_start_aborts_finalizing: cover property (
         @(posedge clk) disable iff (rst)
         (state_r == ST_FINALIZING) ##1 (insn_valid && flavor == FLV_START)

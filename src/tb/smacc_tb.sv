@@ -12,6 +12,7 @@
 //   T6  Two-point spread (0, 254)    -> exact stddev
 //   T7  Restart after DONE           -> no state leaks between runs
 //   T8  Large samples (100k, 300k)   -> full 32-bit results
+//   T9  START aborts an in-flight finalization -> clean recovery
 //
 // Run from the project root:
 //   $ bash scripts/run_tests.sh            # lint + simulate (assertions on)
@@ -228,6 +229,25 @@ module smacc_tb;
         issue(INSN_DATA, 32'd300000, rd);
         expect_stats("T8", 100000, 300000, 2, 200000, 100000, 200000);
 
+        // T9 -- START while the engine is mid-flight must abort it (BUSY
+        //       clears, stats stay gated) and leave the next run consistent.
+        $display("\n-- T9: START aborts finalization --");
+        reset_dut();
+        issue(INSN_START, '0, rd);
+        issue(INSN_DATA, 32'd5, rd);
+        issue(INSN_DATA, 32'd9, rd);
+        issue(INSN_STOP, '0, rd);                       // engine starts
+        issue(insn_read(STAT_STATUS), '0, rd);
+        check("T9 busy",   rd & F_BUSY, F_BUSY);
+        issue(insn_read(STAT_STDDEV), '0, rd);
+        check("T9 gated",  rd, 0);
+        issue(INSN_START, '0, rd);                      // abort mid-flight
+        issue(insn_read(STAT_STATUS), '0, rd);
+        check("T9 status", rd, F_READY);
+        issue(INSN_DATA, 32'd7, rd);
+        issue(INSN_DATA, 32'd7, rd);
+        expect_stats("T9", 7, 7, 2, 7, 0, 0);
+
         // ------------------------------------------------------------
         repeat (4) @(posedge clk);
         if (fails == 0)
@@ -246,7 +266,7 @@ module smacc_tb;
     end
 `endif
 
-    // Watchdog: 8 tests x at most ~600 cycles each, with margin.
+    // Watchdog: 9 tests x at most ~600 cycles each, with margin.
     initial begin
         #60_000;
         $fatal(1, "Watchdog timeout at %0t ns", $time);
