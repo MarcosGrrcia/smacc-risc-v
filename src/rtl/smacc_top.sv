@@ -10,7 +10,7 @@
 //
 // PCPI handshake: every instruction acks the cycle it is presented
 // (pcpi_wait tied low). STOP launches the 162-cycle engine in the
-// background; software polls STATUS_DONE.
+// background; software polls STATUS_DONE (ISA_SPEC.md section 7.3).
 //
 // READ returns full 32-bit values: min/max/count from smacc_mem,
 // avg/stddev/delta from smacc_datapath (gated to 0 unless ST_DONE).

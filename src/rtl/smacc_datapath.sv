@@ -9,7 +9,8 @@
 // Fixed 162-cycle latency: 1 load + 64 + 64 divide + 1 variance + 32 isqrt.
 // One divider is shared across both divides, and avg^2 is squared
 // bit-serially during the second divide (which doesn't read avg), so no
-// multiplier is needed here. The CPU is not stalled; it polls STATUS_DONE.
+// multiplier is needed here. The CPU is not stalled; it polls STATUS_DONE
+// (ISA_SPEC.md section 7.3).
 //
 // Results hold after dp_done and are exposed by smacc_top only in ST_DONE,
 // so partial values are never visible. All three fit 32 bits; avg saturates

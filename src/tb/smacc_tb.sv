@@ -100,8 +100,8 @@ module smacc_tb;
         pcpi_valid = 1'b0;
     endtask
 
-    // STOP returns immediately; software polls STATUS_DONE.
-    // Finalization is fixed at 162 cycles, so 200 polls is ample.
+    // STOP returns immediately; software polls STATUS_DONE (ISA_SPEC.md
+    // section 7.3). Finalization is fixed at 162 cycles, so 200 polls is ample.
     task automatic poll_done;
         logic [31:0] st;
         repeat (200) begin
