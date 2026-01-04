@@ -12,6 +12,7 @@
 //   T6  Two-point spread (0, 254)    -> exact stddev
 //   T7  Restart after DONE           -> no state leaks between runs
 //   T8  Large samples (100k, 300k)   -> full 32-bit results
+//   T9  START aborts an in-flight finalization -> clean recovery
 //
 // Run from the project root:
 //   $ bash scripts/run_tests.sh            # lint + simulate (assertions on)
@@ -80,8 +81,8 @@ module smacc_tb;
     // ----------------------------------------------------------------
 
     // Drive one instruction and sample pcpi_rd on the acknowledge edge.
-    // START/DATA/READ ack the cycle they are presented; a legal STOP holds
-    // pcpi_wait until the datapath is done, so wait (bounded) for ready.
+    // Every SMACC op (including STOP) acks the cycle it is presented, so
+    // one task covers all four instructions.
     task automatic issue(
         input  logic [31:0] insn,
         input  logic [31:0] rs1,
@@ -92,15 +93,22 @@ module smacc_tb;
         pcpi_insn  = insn;
         pcpi_rs1   = rs1;
         @(posedge clk);
-        repeat (16) begin
-            if (pcpi_ready) break;
-            @(posedge clk);
-        end
         if (!pcpi_ready)
             $fatal(1, "pcpi_ready not asserted (cycle %0d)", cycles);
         rd = pcpi_rd;
         #1;
         pcpi_valid = 1'b0;
+    endtask
+
+    // STOP returns immediately; software polls STATUS_DONE (ISA_SPEC.md
+    // section 7.3). Finalization is fixed at 162 cycles, so 200 polls is ample.
+    task automatic poll_done;
+        logic [31:0] st;
+        repeat (200) begin
+            issue(insn_read(STAT_STATUS), '0, st);
+            if ((st & F_DONE) != 0) return;
+        end
+        $fatal(1, "STATUS_DONE never set (cycle %0d)", cycles);
     endtask
 
     task automatic check(
@@ -121,13 +129,14 @@ module smacc_tb;
         #1; rst = 1'b0;
     endtask
 
-    // STOP the current run and check all six statistics.
+    // Finalize the current run and check all six statistics.
     task automatic expect_stats(
         input string tag,
         input logic [31:0] e_min, e_max, e_count, e_avg, e_stddev, e_delta
     );
         logic [31:0] rd;
         issue(INSN_STOP, '0, rd);
+        poll_done();
         issue(insn_read(STAT_MIN),    '0, rd);  check({tag, " min"},    rd, e_min);
         issue(insn_read(STAT_MAX),    '0, rd);  check({tag, " max"},    rd, e_max);
         issue(insn_read(STAT_COUNT),  '0, rd);  check({tag, " count"},  rd, e_count);
@@ -144,7 +153,7 @@ module smacc_tb;
 
         // T1 -- Samples 5..50: sum=275, avg=27, variance=962-27^2=233,
         //       stddev=isqrt(233)=15. Also checks running stats mid-run and
-        //       that avg reads 0 until STOP completes.
+        //       that avg reads 0 until finalization completes.
         $display("\n-- T1: full run, 10 samples --");
         reset_dut();
         issue(INSN_START, '0, rd);
@@ -155,7 +164,7 @@ module smacc_tb;
         expect_stats("T1", 5, 50, 10, 27, 15, 45);
 
         // T2 -- STOP outside ACCUMULATE sets the sticky error flag
-        //       (ISA_SPEC.md section 9) and acks without stalling.
+        //       (ISA_SPEC.md section 9); READY remains set alongside it.
         $display("\n-- T2: illegal STOP --");
         reset_dut();
         issue(INSN_START, '0, rd);
@@ -206,6 +215,7 @@ module smacc_tb;
         issue(INSN_START, '0, rd);
         for (int i = 1; i <= 3; i++) issue(INSN_DATA, i, rd);
         issue(INSN_STOP, '0, rd);
+        poll_done();
         issue(INSN_START, '0, rd);
         for (int i = 1; i <= 3; i++) issue(INSN_DATA, i * 10, rd);
         expect_stats("T7", 10, 30, 3, 20, 8, 20);
@@ -218,6 +228,25 @@ module smacc_tb;
         issue(INSN_DATA, 32'd100000, rd);
         issue(INSN_DATA, 32'd300000, rd);
         expect_stats("T8", 100000, 300000, 2, 200000, 100000, 200000);
+
+        // T9 -- START while the engine is mid-flight must abort it (BUSY
+        //       clears, stats stay gated) and leave the next run consistent.
+        $display("\n-- T9: START aborts finalization --");
+        reset_dut();
+        issue(INSN_START, '0, rd);
+        issue(INSN_DATA, 32'd5, rd);
+        issue(INSN_DATA, 32'd9, rd);
+        issue(INSN_STOP, '0, rd);                       // engine starts
+        issue(insn_read(STAT_STATUS), '0, rd);
+        check("T9 busy",   rd & F_BUSY, F_BUSY);
+        issue(insn_read(STAT_STDDEV), '0, rd);
+        check("T9 gated",  rd, 0);
+        issue(INSN_START, '0, rd);                      // abort mid-flight
+        issue(insn_read(STAT_STATUS), '0, rd);
+        check("T9 status", rd, F_READY);
+        issue(INSN_DATA, 32'd7, rd);
+        issue(INSN_DATA, 32'd7, rd);
+        expect_stats("T9", 7, 7, 2, 7, 0, 0);
 
         // ------------------------------------------------------------
         repeat (4) @(posedge clk);
@@ -237,9 +266,9 @@ module smacc_tb;
     end
 `endif
 
-    // Watchdog: every test finishes in well under 100 cycles.
+    // Watchdog: 9 tests x at most ~600 cycles each, with margin.
     initial begin
-        #20_000;
+        #60_000;
         $fatal(1, "Watchdog timeout at %0t ns", $time);
     end
 

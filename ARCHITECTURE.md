@@ -2,57 +2,70 @@
 
 ## Overview
 
-A PicoRV32 RISC-V core extended through the PCPI coprocessor interface with
-four custom instructions for computing statistics over a stream of samples.
-One DATA instruction replaces the compare/add/multiply sequence software
-would need per sample (PicoRV32 is built without the M extension here, so
-squaring in software is especially slow).
+SMACC adds four custom instructions to a PicoRV32 core through its PCPI
+coprocessor interface. They compute statistics over a stream of 32-bit
+samples. One DATA instruction does what would otherwise be a few dozen to a
+few hundred cycles of software per sample: update min/max, bump the count,
+and add to a 64-bit sum and sum of squares (the squaring is the expensive
+part on a core without the M extension).
 
 ## Instructions
 
-All four use the RISC-V custom-0 opcode (`0x0B`); the SMACC ID in `funct3`
-picks the operation (see [docs/ISA_SPEC.md](docs/ISA_SPEC.md)):
+All four use the RISC-V custom-0 opcode (`0x0B`), and `funct3` picks the
+operation. Encodings are in [docs/ISA_SPEC.md](docs/ISA_SPEC.md).
 
-- START (ID 0): Clear all statistics, go to READY
-- DATA  (ID 1): Submit one sample from `rs1`
-- STOP  (ID 2): Compute avg/stddev/delta; the CPU stalls until done
-- READ  (ID 3): Read one 32-bit statistic, selected by `imm[2:0]`, into `rd`
+- `START` (funct3=000): clear the accumulators, go to READY
+- `DATA` (funct3=001): add the sample in `rs1`
+- `STOP` (funct3=010): start computing avg/stddev/delta in the background
+- `READ` (funct3=011): put the statistic selected by `imm[2:0]` in `rd`
 
-## Statistics Calculated
+## Statistics
 
-| Statistic | Updated              | Implementation                  |
-| --------- | -------------------- | ------------------------------- |
-| Min       | Every DATA           | Comparator, running minimum     |
-| Max       | Every DATA           | Comparator, running maximum     |
-| Count     | Every DATA           | Counter                         |
-| Average   | STOP                 | sum / count                     |
-| Stddev    | STOP                 | isqrt(sum_sq/count - avg^2)     |
-| Delta     | STOP                 | max - min                       |
+| Statistic | Available            | How                                         |
+| --------- | -------------------- | ------------------------------------------- |
+| Min       | Always (live)        | Comparator                                  |
+| Max       | Always (live)        | Comparator                                  |
+| Count     | Always (live)        | Counter                                     |
+| Average   | After STOP finishes  | sum / count on the shared divider           |
+| Stddev    | After STOP finishes  | isqrt(sum_sq/count - avg^2), bit-serial     |
+| Delta     | After STOP finishes  | max - min, taken when finalization starts   |
 
-## Data Flow
+Everything comes back as a 32-bit value. The accumulators are 64-bit, and
+readouts saturate instead of wrapping (count at 2^32-1).
 
-1. START → min=0xFFFF_FFFF, max/count/sum/sum_of_squares=0, state READY
-2. DATA (per sample) → min/max/count/sum/sum_of_squares update in one cycle
-3. STOP → CPU stalls on `pcpi_wait` while the datapath pipeline runs
-4. READ → returns the selected statistic; avg/stddev/delta read 0 until DONE
+## Flow
 
-## Implementation Modules
+1. START: min=0xFFFF_FFFF, max/count/sum/sum_of_squares=0, state READY
+2. DATA per sample: running stats update in one cycle and can be read any time
+3. STOP: acks immediately; the engine runs for 162 cycles (state FINALIZING,
+   STATUS_BUSY)
+4. Software polls READ STATUS for STATUS_DONE, or does other work first
+5. READ: avg/stddev/delta are valid now; min/max/count still readable
 
-- smacc_isa_defs.sv: opcode, SMACC IDs, states, status bits
-- smacc_ctrl.sv: FSM (IDLE/READY/ACCUMULATE/COMPUTE/DONE), error flag,
+## Modules
+
+- `smacc_isa_defs.sv`: ISA constants, enums, status masks
+- `smacc_ctrl.sv`: FSM (IDLE/READY/ACCUMULATE/FINALIZING/DONE), sticky error,
   status byte
-- smacc_mem.sv: accumulator registers, updated on DATA
-- smacc_datapath.sv: 5-stage pipeline for avg/stddev/delta
-- smacc_top.sv: PCPI decode, STOP stall, READ result mux
+- `smacc_mem.sv`: min, max, count, sum, sum_of_squares; updated on DATA and
+  read directly by READ
+- `smacc_datapath.sv`: finalization engine, one restoring divider used for
+  both divides plus a bit-serial isqrt, 162 cycles
+- `smacc_top.sv`: PCPI decode, READ mux, wiring
+- `smacc_system.sv`: PicoRV32 + smacc_top connected over PCPI
 
-## Key Design Decisions
+## Design decisions
 
-1. PCPI coprocessor instead of memory-mapped registers: real ISA
-   extension, no changes to the core, one instruction per sample.
-2. 64-bit accumulators: sum and sum_of_squares of 32-bit samples need
-   the extra headroom.
-3. 32-bit results: every statistic comes back at the width of a RISC-V
-   register. (v1 packed 8-bit fields into one 64-bit register, which was
-   fine for the course's 8-bit sensor data and nothing else.)
-4. Pipelined datapath: the divides, the multiply, and the square root
-   each get their own stage so no single stage is too long.
+1. PCPI coprocessor instead of memory-mapped registers. It's a real ISA
+   extension, the core doesn't change, and DATA is one instruction.
+2. Every result is 32 bits, the width of a RISC-V register. No packing
+   several stats into one word.
+3. 64-bit accumulators, so a 32-bit sample stream stays exact until the
+   overflow point, which is flagged.
+4. STOP doesn't stall, so the math can be slow and small. One bit-serial
+   divider (used twice) and a bit-serial squarer for avg^2 replace the big
+   combinational blocks of the original design: ~12.7 K generic cells vs
+   ~78 K. The only multiplier left is the sum-of-squares one, which the
+   single-cycle DATA needs.
+5. avg/stddev/delta read as 0 unless the FSM is in DONE, so a result that's
+   still being computed, or left over from an earlier run, never shows up.
