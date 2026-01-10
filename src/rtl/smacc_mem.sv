@@ -40,10 +40,15 @@ module smacc_mem (
     assign sq    = {{(ACCUM_W-DATA_W){1'b0}}, sq_in} *
                    {{(ACCUM_W-DATA_W){1'b0}}, sq_in};
 
-    // Saturate instead of wrapping: check headroom before each add.
+    // Saturating accumulate: the widened add's carry-out is the overflow
+    // test, so no separate compare is needed.
+    logic [ACCUM_W:0] sum_nx, sum_sq_nx;
+    assign sum_nx    = {1'b0, sum_out}       + {1'b0, data_in_ext};
+    assign sum_sq_nx = {1'b0, sum_of_sq_out} + {1'b0, sq};
+
     logic sum_ovf, sq_ovf;
-    assign sum_ovf = (sum_out       > (ACCUM_MAX - data_in_ext));
-    assign sq_ovf  = (sum_of_sq_out > (ACCUM_MAX - sq));
+    assign sum_ovf = sum_nx[ACCUM_W];
+    assign sq_ovf  = sum_sq_nx[ACCUM_W];
 
     // rst and clear are both synchronous with identical effect, so they
     // share one branch. Reset is synchronous design-wide (see smacc_ctrl).
@@ -63,8 +68,8 @@ module smacc_mem (
                 max_out <= data_in;
             end
             count_out     <= count_out + 1;
-            sum_out       <= sum_ovf ? ACCUM_MAX : (sum_out + data_in_ext);
-            sum_of_sq_out <= sq_ovf  ? ACCUM_MAX : (sum_of_sq_out + sq);
+            sum_out       <= sum_ovf ? ACCUM_MAX : sum_nx[ACCUM_W-1:0];
+            sum_of_sq_out <= sq_ovf  ? ACCUM_MAX : sum_sq_nx[ACCUM_W-1:0];
             if (sum_ovf || sq_ovf) begin
                 overflow <= 1'b1;
             end
