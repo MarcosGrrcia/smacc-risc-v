@@ -1,5 +1,7 @@
 // smacc_mem.sv: Statistics register file for SMACC.
 // Stores min/max/count/sum/sum_of_squares; all updated in parallel on DATA.
+// READ serves min/max/count directly from here (via smacc_top); sum and
+// sum_of_squares feed the smacc_datapath finalization engine.
 
 `ifndef SMACC_MEM_SV
 `define SMACC_MEM_SV
@@ -14,6 +16,7 @@ module smacc_mem (
     input  logic                   write_enable,  // DATA: accumulate one sample
     input  logic [DATA_W-1:0]      data_in,
 
+    // Registered outputs: these are the accumulator registers themselves.
     output logic [DATA_W-1:0]      min_out,
     output logic [DATA_W-1:0]      max_out,
     output logic [ACCUM_W-1:0]     count_out,
@@ -26,18 +29,27 @@ module smacc_mem (
     localparam logic [ACCUM_W-1:0] ACCUM_MAX = {ACCUM_W{1'b1}};
 
     logic [ACCUM_W-1:0] data_in_ext;
-    logic [ACCUM_W-1:0] sq;
     assign data_in_ext = {{(ACCUM_W-DATA_W){1'b0}}, data_in};
-    assign sq          = data_in_ext * data_in_ext;
+
+    // 32x32 -> 64 square. Operand gated with write_enable (operand
+    // isolation) so the multiplier only switches on real DATA, not on every
+    // CPU instruction that drives pcpi_rs1.
+    logic [DATA_W-1:0]  sq_in;
+    logic [ACCUM_W-1:0] sq;
+    assign sq_in = write_enable ? data_in : '0;
+    assign sq    = {{(ACCUM_W-DATA_W){1'b0}}, sq_in} *
+                   {{(ACCUM_W-DATA_W){1'b0}}, sq_in};
 
     // Saturate instead of wrapping: check headroom before each add.
     logic sum_ovf, sq_ovf;
     assign sum_ovf = (sum_out       > (ACCUM_MAX - data_in_ext));
     assign sq_ovf  = (sum_of_sq_out > (ACCUM_MAX - sq));
 
+    // rst and clear are both synchronous with identical effect, so they
+    // share one branch. Reset is synchronous design-wide (see smacc_ctrl).
     always_ff @(posedge clk) begin
         if (rst || clear) begin
-            min_out       <= {DATA_W{1'b1}};
+            min_out       <= {DATA_W{1'b1}};  // 0xFFFF_FFFF (ISA_SPEC.md section 4.1)
             max_out       <= '0;
             count_out     <= '0;
             sum_out       <= '0;
