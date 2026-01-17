@@ -76,6 +76,37 @@ module smacc_mem (
         end
     end
 
+    // Assertions
+    `ifdef SMACC_ASSERT
+
+    ast_clear_resets_min: assert property (
+        @(posedge clk) disable iff (rst)
+        clear |=> (min_out == {DATA_W{1'b1}})
+    ) else $error("smacc_mem: min_out not 0xFFFFFFFF after clear");
+
+    ast_clear_resets_accumulators: assert property (
+        @(posedge clk) disable iff (rst)
+        clear |=> (max_out == '0 && count_out == '0 && sum_out == '0 &&
+                   sum_of_sq_out == '0 && overflow == 1'b0)
+    ) else $error("smacc_mem: accumulators not zeroed after clear");
+
+    ast_count_increments: assert property (
+        @(posedge clk) disable iff (rst || clear)
+        (write_enable && !clear) |=> (count_out == $past(count_out) + 1)
+    ) else $error("smacc_mem: count did not increment on write_enable");
+
+    ast_overflow_sticky: assert property (
+        @(posedge clk) disable iff (rst)
+        (overflow && !clear) |=> overflow
+    ) else $error("smacc_mem: overflow flag cleared without rst or clear");
+
+    ast_no_simultaneous_clear_write: assert property (
+        @(posedge clk) disable iff (rst)
+        !(clear && write_enable)
+    ) else $warning("smacc_mem: clear and write_enable both asserted; DATA write discarded");
+
+    `endif // SMACC_ASSERT
+
 endmodule: smacc_mem
 
 `endif // SMACC_MEM_SV
