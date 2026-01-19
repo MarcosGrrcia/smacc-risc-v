@@ -13,6 +13,9 @@
 //   T7  Restart after DONE           -> no state leaks between runs
 //   T8  Large samples (100k, 300k)   -> full 32-bit results
 //   T9  START aborts an in-flight finalization -> clean recovery
+//   T10 All-zero samples             -> every statistic reads 0
+//   T11 Single max sample (2^32-1)   -> exact math at the top of the range
+//   T12 Sum-of-squares overflow      -> saturates, sticky STATUS_ERROR
 //
 // Run from the project root:
 //   $ bash scripts/run_tests.sh            # lint + simulate (assertions on)
@@ -184,7 +187,7 @@ module smacc_tb;
         check("T3 error clr", rd & F_ERROR, 0);
 
         // T4 -- One sample: avg is the sample, stddev/delta 0. Mid-run reads
-        //       guard a past bug where the stats lagged DATA by a cycle.
+        //       guard a past bug where the first sample lagged a cycle.
         $display("\n-- T4: single sample --");
         reset_dut();
         issue(INSN_START, '0, rd);
@@ -248,6 +251,37 @@ module smacc_tb;
         issue(INSN_DATA, 32'd7, rd);
         expect_stats("T9", 7, 7, 2, 7, 0, 0);
 
+        // T10 -- All zeros: every statistic reads 0; count proves the
+        //        samples were accepted.
+        $display("\n-- T10: all-zero samples --");
+        reset_dut();
+        issue(INSN_START, '0, rd);
+        repeat (4) issue(INSN_DATA, 32'd0, rd);
+        expect_stats("T10", 0, 0, 4, 0, 0, 0);
+
+        // T11 -- Largest legal sample: its square just fits the 64-bit
+        //        accumulator, so avg is exact and variance is 0.
+        $display("\n-- T11: single max sample (2^32-1) --");
+        reset_dut();
+        issue(INSN_START, '0, rd);
+        issue(INSN_DATA, 32'hFFFF_FFFF, rd);
+        expect_stats("T11", 32'hFFFF_FFFF, 32'hFFFF_FFFF, 1,
+                     32'hFFFF_FFFF, 0, 0);
+
+        // T12 -- Two max samples overflow sum_of_squares: it saturates and
+        //        ERROR latches. Finalization still completes (avg exact,
+        //        variance floors to 0); derived stats are invalid once ERROR
+        //        is set (ISA_SPEC.md section 9).
+        $display("\n-- T12: sum-of-squares overflow --");
+        reset_dut();
+        issue(INSN_START, '0, rd);
+        issue(INSN_DATA, 32'hFFFF_FFFF, rd);
+        issue(INSN_DATA, 32'hFFFF_FFFF, rd);
+        issue(insn_read(STAT_STATUS), '0, rd);
+        check("T12 error", rd & F_ERROR, F_ERROR);
+        expect_stats("T12", 32'hFFFF_FFFF, 32'hFFFF_FFFF, 2,
+                     32'hFFFF_FFFF, 0, 0);
+
         // ------------------------------------------------------------
         repeat (4) @(posedge clk);
         if (fails == 0)
@@ -266,9 +300,9 @@ module smacc_tb;
     end
 `endif
 
-    // Watchdog: 9 tests x at most ~600 cycles each, with margin.
+    // Watchdog: 12 tests x at most ~600 cycles each, with margin.
     initial begin
-        #60_000;
+        #80_000;
         $fatal(1, "Watchdog timeout at %0t ns", $time);
     end
 

@@ -30,7 +30,7 @@ Requires [Verilator](https://verilator.org) >= 5.0 (and optionally
 [Yosys](https://yosyshq.net/yosys/) + GTKWave):
 
 ```sh
-bash scripts/run_tests.sh           # lint + run all 9 test groups (53 checks)
+bash scripts/run_tests.sh           # lint + run all 12 test groups (72 checks)
 bash scripts/run_tests.sh --wave    # same, plus smacc_tb.vcd for GTKWave
 yosys -s scripts/synth.ys           # synthesis sanity check + area report
 ```
