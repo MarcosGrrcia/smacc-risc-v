@@ -16,6 +16,7 @@
 //   T10 All-zero samples             -> every statistic reads 0
 //   T11 Single max sample (2^32-1)   -> exact math at the top of the range
 //   T12 Sum-of-squares overflow      -> saturates, sticky STATUS_ERROR
+//   T13 64 random samples            -> checked against a reference model
 //
 // Run from the project root:
 //   $ bash scripts/run_tests.sh            # lint + simulate (assertions on)
@@ -146,6 +147,37 @@ module smacc_tb;
         issue(insn_read(STAT_AVG),    '0, rd);  check({tag, " avg"},    rd, e_avg);
         issue(insn_read(STAT_STDDEV), '0, rd);  check({tag, " stddev"}, rd, e_stddev);
         issue(insn_read(STAT_DELTA),  '0, rd);  check({tag, " delta"},  rd, e_delta);
+    endtask
+
+    // Drive n random samples and check against a software reference model
+    // using the same ISA math (truncating divide, floored variance, integer
+    // sqrt). Samples are 24-bit to keep the accumulators clear of overflow.
+    task automatic run_random_test(input int n, input int unsigned seed);
+        logic [31:0]     rd, sample, mn, mx;
+        longint unsigned n64, s64, sum, sum_sq, avg, mean_sq, variance, root, b;
+        void'($urandom(seed));
+        mn  = 32'hFFFF_FFFF;
+        mx  = '0;
+        sum = 0;
+        sum_sq = 0;
+        issue(INSN_START, '0, rd);
+        repeat (n) begin
+            sample = $urandom_range(32'h00FF_FFFF);
+            if (sample < mn) mn = sample;
+            if (sample > mx) mx = sample;
+            s64     = {32'b0, sample};
+            sum    += s64;
+            sum_sq += s64 * s64;
+            issue(INSN_DATA, sample, rd);
+        end
+        n64      = longint'(n);
+        avg      = sum / n64;
+        mean_sq  = sum_sq / n64;
+        variance = (mean_sq >= avg * avg) ? (mean_sq - avg * avg) : 0;
+        root = 0;
+        for (b = 64'd1 << 24; b > 0; b >>= 1)
+            if ((root + b) * (root + b) <= variance) root += b;
+        expect_stats("T13", mn, mx, n, avg[31:0], root[31:0], mx - mn);
     endtask
 
     // ----------------------------------------------------------------
@@ -282,6 +314,11 @@ module smacc_tb;
         expect_stats("T12", 32'hFFFF_FFFF, 32'hFFFF_FFFF, 2,
                      32'hFFFF_FFFF, 0, 0);
 
+        // T13 -- Random regression with a fixed seed for reproducibility.
+        $display("\n-- T13: 64 random samples vs reference model --");
+        reset_dut();
+        run_random_test(64, 32'h00C0FFEE);
+
         // ------------------------------------------------------------
         repeat (4) @(posedge clk);
         if (fails == 0)
@@ -300,7 +337,7 @@ module smacc_tb;
     end
 `endif
 
-    // Watchdog: 12 tests x at most ~600 cycles each, with margin.
+    // Watchdog: 13 tests x at most ~600 cycles each, with margin.
     initial begin
         #80_000;
         $fatal(1, "Watchdog timeout at %0t ns", $time);
