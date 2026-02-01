@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Lint the RTL and run the SMACC testbench (Verilator >= 5.0).
+# Lint the RTL and run the full SMACC test suite (Verilator >= 5.0).
 #
 # Usage, from the project root:
 #   bash scripts/run_tests.sh           # lint + simulate (assertions on)
