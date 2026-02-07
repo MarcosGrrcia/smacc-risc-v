@@ -64,7 +64,7 @@ readouts saturate instead of wrapping (count at 2^32-1).
    overflow point, which is flagged.
 4. STOP doesn't stall, so the math can be slow and small. One bit-serial
    divider (used twice) and a bit-serial squarer for avg^2 replace the big
-   combinational blocks of the original design: ~12.7 K generic cells vs
+   combinational blocks of the original design: ~12.2 K generic cells vs
    ~78 K. The only multiplier left is the sum-of-squares one, which the
    single-cycle DATA needs.
 5. avg/stddev/delta read as 0 unless the FSM is in DONE, so a result that's

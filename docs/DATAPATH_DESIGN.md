@@ -31,7 +31,7 @@ STOP (acks same cycle)
 | READ      | 1      | Combinational mux over mem / engine / status    |
 
 The critical path is the DATA accumulate in `smacc_mem`: a 32x32 multiply,
-the 64-bit add and its headroom compare, and the saturate mux. That comes with single-cycle DATA.
+a 65-bit add, and the saturate mux. That comes with single-cycle DATA.
 Everything in the engine is a short compare/subtract or add between
 registers, and there's no combinational divider anywhere.
 
@@ -58,8 +58,8 @@ running values are always current. Min reads as 0 while `count == 0` so the
 
 - **Accumulators:** 64-bit `sum` and `count`, enough for ~4 x 10^9
   max-valued 32-bit samples before saturating.
-- **Overflow:** `sum_ovf = (sum > ACCUM_MAX - data_in)` is checked before
-  every add. The accumulator saturates at `64'hFFFF...` and sets
+- **Overflow:** the add is one bit wider and its carry-out is the overflow
+  flag (see §6). The accumulator saturates at `64'hFFFF...` and sets
   STATUS_ERROR.
 - **Division:** `avg = sum / count` on the shared restoring divider, one
   quotient bit per cycle for 64 cycles, ~200 gates of compare/subtract
@@ -131,8 +131,8 @@ in flight, so a pipeline doesn't buy any throughput, just more hardware. The
 original design was a 5-stage pipeline with two single-cycle 64/64
 combinational dividers. It came to ~78 K generic cells, and the dividers
 were most of the area and the longest path. The sequential engine (one
-divider used twice, plus the squarer for avg^2) is ~12.7 K cells, about
-6.2x smaller, and the long divider path is gone. What it costs is 162
+divider used twice, plus the squarer for avg^2) is ~12.2 K cells, about
+6.4x smaller, and the long divider path is gone. What it costs is 162
 cycles of latency. With a non-stalling STOP that's hidden: at PicoRV32's
 ~4 CPI it's only about 40 instructions.
 
@@ -157,6 +157,15 @@ working registers, and it's built the same way as the divider.
 
 **One multiplier.** The only combinational multiplier left is the 32x32
 squarer in `smacc_mem`, and it has to stay single-cycle because DATA is.
+Two things keep it cheap:
+
+- The sample going into it is gated with `write_enable`. `pcpi_rs1`
+  changes on almost every CPU instruction, so without the gate the
+  multiplier would keep squaring garbage. With it, it only switches on
+  real DATA.
+- Overflow is the carry-out of the widened add (`(a + b) > MAX` exactly
+  when it carries), which removes the two 64-bit subtract/compare chains a
+  headroom check needs. Smaller and faster.
 
 ---
 
@@ -173,34 +182,35 @@ DONE.
 
 | Metric                       | 5-stage pipeline (v1) | Sequential engine (v2) |
 |------------------------------|-----------------------|------------------------|
-| Generic cells                | ~77.8 K               | ~12.7 K                |
+| Generic cells                | ~77.8 K               | ~12.2 K                |
 | Flip-flops                   | 1,010                 | 915                    |
 | Inferred latches             | 0                     | 0                      |
 
-Cells from the latest `yosys -s scripts/synth.ys` (12,653 cells, 915 flops):
+Cells from the latest `yosys -s scripts/synth.ys` (12,170 cells, 915 flops):
 
 ```plaintext
-$_ANDNOT_   4109      $_NOT_         405
-$_AND_       837      $_ORNOT_       793
-$_DFF_P_      10      $_OR_         1077
-$_MUX_       324      $_SDFFE_PP0P_  872
-$_NAND_      539      $_SDFFE_PP1P_   32
-$_NOR_       791      $_SDFF_PP0_      1
-$_XNOR_      964      $_XOR_        1899
+$_ANDNOT_   3799      $_NOT_         328
+$_AND_       387      $_ORNOT_       780
+$_DFF_P_      10      $_OR_         1148
+$_MUX_       322      $_SDFFE_PP0P_  872
+$_NAND_      483      $_SDFFE_PP1P_   32
+$_NOR_      1143      $_SDFF_PP0_      1
+$_XNOR_      973      $_XOR_        1892
 ```
 
 905 of the 915 flops map to synchronous-reset cells (`$_SDFF*`) and almost
 all of those have an enable. The other 10 are the FSM state bits in
 `smacc_ctrl` and `smacc_datapath`, which Yosys re-encodes and whose reset
-ends up in the next-state logic. By module: `smacc_mem` 7,801 cells,
+ends up in the next-state logic. By module: `smacc_mem` 7,318 cells,
 `smacc_datapath` 4,145, `smacc_top` 658, `smacc_ctrl` 52.
 
 Most of what's left is the 32x32 squarer in `smacc_mem` and the 64-bit
-accumulator and working registers. Next to a ~30 K-cell PicoRV32, ~12.7 K
+accumulator and working registers. Next to a ~30 K-cell PicoRV32, ~12.2 K
 seems reasonable.
 
 **Power:** almost all flops come out enable-gated (`$_SDFFE_*`), which a
 clock-gating pass can turn into clock gates. The engine's working registers
-only toggle during the 162-cycle finalization.
+only toggle during the 162-cycle finalization, and the multiplier only on
+accepted DATA.
 
 There are no RAMs. All state is in flip-flops.

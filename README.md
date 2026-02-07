@@ -40,13 +40,13 @@ yosys -s scripts/synth.ys           # synthesis sanity check + area report
 ```plaintext
 src/rtl/      SMACC RTL + PicoRV32 base core
 src/tb/       Self-checking testbench
-docs/         ISA spec, datapath design
+docs/         ISA spec, datapath design, verification plan
 scripts/      Test runner and synthesis check
 ```
 
 ## Results
 
-`yosys -s scripts/synth.ys` puts the accelerator at ~12.7 K generic cells,
+`yosys -s scripts/synth.ys` puts the accelerator at ~12.2 K generic cells,
 down from ~78 K for the original pipelined design. STOP now takes a fixed
 162 cycles in the background instead of stalling for 6. Details in
 [docs/DATAPATH_DESIGN.md](docs/DATAPATH_DESIGN.md).
