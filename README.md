@@ -1,63 +1,143 @@
 # SMACC: Statistical Math Accelerator for RISC-V
 
-SMACC is a coprocessor for the [PicoRV32](https://github.com/YosysHQ/picorv32)
-RISC-V core that computes statistics over a stream of 32-bit samples: min,
-max, count, average, standard deviation, and range. The CPU drives it with
-four custom instructions over PicoRV32's PCPI interface.
+SMACC is a small coprocessor for the [PicoRV32](https://github.com/YosysHQ/picorv32)
+RISC-V core that keeps running statistics over a stream of 32-bit samples:
+min, max, count, average, standard deviation, and range (max - min). The CPU
+drives it with four custom instructions over PicoRV32's PCPI coprocessor
+interface.
 
-SMACC started as our System-on-Chip course project in Fall 2024 (tagged
-`v1.0`). Since then READ returns full 32-bit statistics instead of 8-bit
-fields, the RTL has been cleaned up (synchronous reset throughout,
-warning-free under Verilator `-Wall`), the design has SVA checks, and the
-pipelined datapath has been replaced by a sequential engine that runs in
-the background: STOP no longer stalls the CPU.
+It started as our final project for a System-on-Chip course in Fall 2024
+(tagged `v1.0`) and we've kept coming back to it since. Compared to the
+course version, the pipelined datapath is gone in favor of a bit-serial one
+that's about a sixth of the size, STOP no longer stalls the CPU, and the
+testbench and assertions are a lot more thorough.
 
-## Instruction Set
+In software on PicoRV32, every sample costs a couple of compares for
+min/max, a 64-bit add, and a multiply for the sum of squares, and without
+the M extension that multiply is a library call. With SMACC it's one
+instruction per sample.
 
-All four instructions live in the RISC-V *custom-0* opcode space (`0x0B`);
-see [docs/ISA_SPEC.md](docs/ISA_SPEC.md) for encodings:
+## Instructions
 
-| Instruction | Action                                                  |
+All four use the RISC-V custom-0 opcode (`0x0B`) and are told apart by
+`funct3`. Bit-level encodings are in [docs/ISA_SPEC.md](docs/ISA_SPEC.md).
+
+| Instruction | What it does                                            |
 |-------------|---------------------------------------------------------|
-| `START`     | Clear all state, begin a new run                        |
-| `DATA rs1`  | Accumulate one 32-bit sample (single cycle)             |
-| `STOP`      | Kick off avg/stddev/delta finalization (returns at once)|
-| `READ rd,n` | Read statistic *n* as a full 32-bit value               |
+| `START`     | Clear everything and start a new run                    |
+| `DATA rs1`  | Add one 32-bit sample (1 cycle)                         |
+| `STOP`      | Start computing avg/stddev/delta, returns right away    |
+| `READ rd,n` | Read statistic `n` into `rd` (full 32 bits)             |
 
-## Quick Start
+After STOP, avg/stddev/delta take a fixed 162 cycles in the background. The
+CPU can poll the status flags or go do something else in the meantime.
+Until they're done those three read as 0, so you can't get a stale or
+half-computed value.
 
-Requires [Verilator](https://verilator.org) >= 5.0 (and optionally
-[Yosys](https://yosyshq.net/yosys/) + GTKWave):
-
-```sh
-bash scripts/run_tests.sh           # lint + run all 13 test groups (78 checks)
-bash scripts/run_tests.sh --wave    # same, plus smacc_tb.vcd for GTKWave
-yosys -s scripts/synth.ys           # synthesis sanity check + area report
-```
-
-## Repository Layout
+## Architecture
 
 ```plaintext
-src/rtl/      SMACC RTL + PicoRV32 base core
-src/tb/       Self-checking testbench
-docs/         ISA spec, datapath design, verification plan
-scripts/      Test runner and synthesis check
+ ┌──────────┐   PCPI   ┌────────────┐
+ │ PicoRV32 │ <──────> │ smacc_top  │  decode, READ mux
+ └──────────┘          └─────┬──────┘
+                             │
+          ┌──────────────────┼──────────────────┐
+          V                  V                  V
+   ┌────────────┐     ┌────────────┐     ┌────────────────┐
+   │ smacc_ctrl │     │ smacc_mem  │     │ smacc_datapath │
+   │ FSM,       │     │ min, max,  │     │ avg, stddev,   │
+   │ status,    │     │ count, sum,│     │ delta after    │
+   │ errors     │     │ sum of sq  │     │ STOP, 162 cyc  │
+   └────────────┘     └────────────┘     └────────────────┘
 ```
 
-## Results
+smacc_mem updates on every DATA in one cycle. smacc_datapath only runs
+after STOP, using one bit-serial divider for both divides and a bit-serial
+square root. More detail in [docs/DATAPATH_DESIGN.md](docs/DATAPATH_DESIGN.md).
+A few things worth knowing:
 
-`yosys -s scripts/synth.ys` puts the accelerator at ~12.2 K generic cells,
-down from ~78 K for the original pipelined design. STOP now takes a fixed
-162 cycles in the background instead of stalling for 6. Details in
-[docs/DATAPATH_DESIGN.md](docs/DATAPATH_DESIGN.md).
+- There's one multiplier in the design, the 32x32 squarer in smacc_mem. It
+  has to be combinational because DATA is single-cycle, and its input is
+  gated with DATA so it isn't toggling on every other instruction. avg^2 in
+  the datapath is done with a shift-add while the second divide runs.
+- Nothing wraps. The accumulators saturate and set a sticky error flag
+  (overflow is just the carry-out of the accumulate add), and count/avg
+  clamp at 2^32-1 when read.
+- avg/stddev/delta are muxed to 0 unless the FSM is in DONE.
+- Clean under Verilator `-Wall`, synchronous reset everywhere, no latches.
+
+## Running the tests
+
+Needs [Verilator](https://verilator.org) 5.x. [Yosys](https://yosyshq.net/yosys/)
+and GTKWave are optional.
+
+```sh
+bash scripts/run_tests.sh           # lint + all 13 test groups (78 checks)
+bash scripts/run_tests.sh --wave    # same, and dumps smacc_tb.vcd
+yosys -s scripts/synth.ys           # synthesis + area report
+```
+
+## Verification and results
+
+The testbench drives the PCPI bus directly. T1 through T12 check against
+values worked out by hand (the math is in a comment next to each test), and
+T13 checks 64 random samples against a software model. SVA in the RTL
+covers the FSM, the PCPI handshake, and the divider. Test plan and full
+output are in [docs/VERIFICATION.md](docs/VERIFICATION.md).
+
+The tests cover zeros, 2^32-1, an accumulator overflow, and the random
+run. Part of the output:
+
+```plaintext
+-- T12: sum-of-squares overflow --
+[PASS] T12 error     = 16
+[PASS] T12 min       = 4294967295
+[PASS] T12 count     = 2
+
+-- T13: 64 random samples vs reference model --
+[PASS] T13 min       = 17693
+[PASS] T13 max       = 16080600
+[PASS] T13 avg       = 7990567
+[PASS] T13 stddev    = 4497741
+[PASS] T13 delta     = 16062907
+...
+*** ALL TESTS PASSED *** (2415 cycles)
+```
+
+Synthesis with Yosys 0.33, generic cells, SMACC only (the CPU isn't
+included):
+
+|                  | Original pipelined design | Current design |
+|------------------|---------------------------|----------------|
+| Generic cells    | ~77.8 K                   | ~12.2 K        |
+| Flip-flops       | 1,010                     | 915            |
+| Inferred latches | 0                         | 0              |
+
+## Layout
+
+```plaintext
+src/rtl/      SMACC RTL, PicoRV32, and smacc_system.sv (CPU + SMACC)
+src/tb/       Testbench
+docs/         ISA spec, datapath design, verification
+scripts/      Test and synthesis scripts
+```
+
+Docs: [ARCHITECTURE.md](ARCHITECTURE.md) (overview),
+[docs/ISA_SPEC.md](docs/ISA_SPEC.md) (encodings, status flags, errors),
+[docs/DATAPATH_DESIGN.md](docs/DATAPATH_DESIGN.md) (arithmetic and area),
+[docs/VERIFICATION.md](docs/VERIFICATION.md) (tests and assertions).
 
 ## Authors
 
 - **Marcos Garcia** ([@MarcosGrrcia](https://github.com/MarcosGrrcia))
 - **Calvin L. Brown** ([@Cohbalt](https://github.com/Cohbalt))
 
+Marcos is doing digital design and verification work after graduating.
+Calvin is a GPU verification engineer at NVIDIA, and a lot of the
+verification and cleanup in here comes from that.
+
 ## License
 
-MIT; see [LICENSE](LICENSE). The bundled PicoRV32 core
-([src/rtl/picorv32.v](src/rtl/picorv32.v)) is by Claire Xenia Wolf, ISC
-license.
+MIT, see [LICENSE](LICENSE). The bundled PicoRV32 core
+([src/rtl/picorv32.v](src/rtl/picorv32.v)) is by Claire Xenia Wolf under the
+ISC license.
