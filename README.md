@@ -85,6 +85,13 @@ T13 checks 64 random samples against a software model. SVA in the RTL
 covers the FSM, the PCPI handshake, and the divider. Test plan and full
 output are in [docs/VERIFICATION.md](docs/VERIFICATION.md).
 
+This is GTKWave around T1's STOP. STOP acks right away, the engine runs for
+162 cycles while the CPU keeps polling status, and delta/avg/stddev
+(45/27/15) are settled before the FSM gets to DONE. `state_r` is
+2=ACCUMULATE, 3=FINALIZING, 4=DONE and `dstate_r` is 1=DIV1, 2=DIV2, 4=SQRT.
+
+![SMACC finalization waveform](docs/img/waveform.png)
+
 The tests cover zeros, 2^32-1, an accumulator overflow, and the random
 run. Part of the output:
 

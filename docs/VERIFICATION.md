@@ -186,11 +186,31 @@ are kept for commercial simulators and formal tools behind
 
 ## Reproducing the numbers
 
-- **Test transcript** (above): `bash scripts/run_tests.sh`.
+- **Test transcript** (above and in the README): `bash scripts/run_tests.sh`.
 - **Area/flop counts** (DATAPATH_DESIGN.md section 7): the `stat` output at
   the end of `yosys -s scripts/synth.ys`.
 - **Finalization latency** (162 cycles): the gap between the STOP ack and
-  `STATUS_DONE` in a `--wave` dump. The testbench's poll loop bounds it.
+  `STATUS_DONE` in the waveform. The testbench's poll loop bounds it.
+
+## Capturing the waveform (docs/img/waveform.png)
+
+The picture in the README is from around T1's STOP. To redo it:
+
+1. `bash scripts/run_tests.sh --wave` to get `smacc_tb.vcd`.
+2. Open it with `gtkwave smacc_tb.vcd` and add these from the SST panel:
+   `dut.pcpi_valid`, `dut.pcpi_ready`, `dut.u_ctrl.state_r`,
+   `dut.u_dp.dstate_r`, `dut.u_dp.dp_done`, `dut.u_dp.avg_r`,
+   `dut.u_dp.stddev_r`, `dut.u_dp.delta_r`.
+3. Right-click the buses and set Data Format to Decimal (the FSM values are
+   the enums in `smacc_isa_defs.sv` and `smacc_datapath.sv`).
+4. Zoom to about cycles 25 to 205 (250 ns to 2050 ns). That covers the first
+   STOP, the 162-cycle FINALIZING window with the CPU still polling, and the
+   `dp_done` pulse.
+5. File > Grab To File, saved over `docs/img/waveform.png`.
+
+`pcpi_valid`/`pcpi_ready` keep pulsing the whole time the engine runs (the
+CPU isn't stalled), the engine goes through DIV1/DIV2/VAR/SQRT, and
+`delta_r`/`avg_r`/`stddev_r` settle at 45/27/15 before the FSM gets to DONE.
 
 ## Known gaps
 
