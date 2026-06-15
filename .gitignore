@@ -1,0 +1,29 @@
+# Simulation artifacts
+*.vcd
+*.wdb
+*.log
+*.history
+
+# Toolchain output
+work/
+obj_dir/
+sim_build/
+build/
+
+# IDE
+.vscode/settings.json
+*.swp
+*.swo
+
+# Windows
+Thumbs.db
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Node (if using)
+node_modules/
+package-lock.json
