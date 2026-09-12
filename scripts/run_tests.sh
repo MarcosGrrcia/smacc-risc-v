@@ -12,14 +12,16 @@ if [[ "${1:-}" == "--wave" ]]; then
     WAVE_ARGS="--trace +define+DUMP_VCD"
 fi
 
+RTL_FILELIST="src/rtl/smacc_rtl.f"
+
 echo "== Lint (verilator -Wall) =="
-verilator --lint-only -Wall -Isrc/rtl --top-module smacc_top src/rtl/smacc_top.sv
+verilator --lint-only -Wall -f "$RTL_FILELIST" --top-module smacc_top
 echo "clean"
 
 echo "== Build testbench =="
 # shellcheck disable=SC2086  # WAVE_ARGS is intentionally word-split
 verilator --binary --timing --assert +define+SMACC_ASSERT $WAVE_ARGS \
-    -Isrc/rtl --top-module smacc_tb -Mdir build/vtb -o smacc_tb_sim \
+    -f "$RTL_FILELIST" --top-module smacc_tb -Mdir build/vtb -o smacc_tb_sim \
     src/tb/smacc_tb.sv
 
 echo "== Run =="

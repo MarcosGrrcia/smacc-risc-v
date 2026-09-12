@@ -6,11 +6,6 @@
 // Reset: active-high rst is inverted to picorv32's active-low resetn.
 // PCPI: wired internally; no external ports needed.
 
-`ifndef SMACC_SYSTEM_SV
-`define SMACC_SYSTEM_SV
-
-`include "smacc_top.sv"
-
 module smacc_system #(
     parameter [31:0] PROGADDR_RESET = 32'h0000_0000,
     parameter [31:0] PROGADDR_IRQ   = 32'h0000_0010,
@@ -108,5 +103,3 @@ module smacc_system #(
     );
 
 endmodule: smacc_system
-
-`endif // SMACC_SYSTEM_SV

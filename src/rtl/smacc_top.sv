@@ -15,13 +15,7 @@
 // READ returns full 32-bit values: min/max/count from smacc_mem,
 // avg/stddev/delta from smacc_datapath (gated to 0 unless ST_DONE).
 
-`ifndef SMACC_TOP_SV
-`define SMACC_TOP_SV
-
-`include "smacc_isa_defs.sv"
-`include "smacc_ctrl.sv"
-`include "smacc_datapath.sv"
-`include "smacc_mem.sv"
+`include "smacc_isa_defs.svh"
 
 module smacc_top (
     input  logic        clk,
@@ -178,5 +172,3 @@ module smacc_top (
 `endif // SMACC_ASSERT
 
 endmodule: smacc_top
-
-`endif // SMACC_TOP_SV

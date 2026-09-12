@@ -3,10 +3,7 @@
 // READ serves min/max/count directly from here (via smacc_top); sum and
 // sum_of_squares feed the smacc_datapath finalization engine.
 
-`ifndef SMACC_MEM_SV
-`define SMACC_MEM_SV
-
-`include "smacc_isa_defs.sv"
+`include "smacc_isa_defs.svh"
 
 module smacc_mem (
     input  logic                   clk,
@@ -108,5 +105,3 @@ module smacc_mem (
     `endif // SMACC_ASSERT
 
 endmodule: smacc_mem
-
-`endif // SMACC_MEM_SV

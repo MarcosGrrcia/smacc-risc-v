@@ -3,6 +3,10 @@
 #
 # Confirms the design elaborates, contains no inferred latches, and reports
 # a technology-independent cell/flop count (numbers quoted in the docs).
+# Source list mirrors src/rtl/smacc_rtl.f; -I resolves smacc_isa_defs.svh.
+read_verilog -sv -Isrc/rtl src/rtl/smacc_mem.sv
+read_verilog -sv -Isrc/rtl src/rtl/smacc_ctrl.sv
+read_verilog -sv -Isrc/rtl src/rtl/smacc_datapath.sv
 read_verilog -sv -Isrc/rtl src/rtl/smacc_top.sv
 hierarchy -check -top smacc_top
 proc

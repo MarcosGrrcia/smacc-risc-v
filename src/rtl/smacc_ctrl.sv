@@ -5,16 +5,13 @@
 // gates the derived stats so partial values are never read out.
 // insn_valid is a single-cycle strobe (enforced by smacc_top).
 
-`ifndef SMACC_CTRL_SV
-`define SMACC_CTRL_SV
-
-`include "smacc_isa_defs.sv"
+`include "smacc_isa_defs.svh"
 
 module smacc_ctrl (
     input  logic       clk,
     input  logic       rst,            // synchronous, active-high
 
-    // funct3[1:0]; see smacc_flavor_e in smacc_isa_defs.sv
+    // funct3[1:0]; see smacc_flavor_e in smacc_isa_defs.svh
     input  logic [1:0] flavor,
     input  logic       insn_valid,     // single-cycle strobe
 
@@ -227,5 +224,3 @@ module smacc_ctrl (
 `endif // SMACC_ASSERT
 
 endmodule: smacc_ctrl
-
-`endif // SMACC_CTRL_SV

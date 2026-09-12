@@ -1,8 +1,11 @@
-// smacc_isa_defs.sv: SMACC ISA constants for RISC-V Statistical Math Accelerator
-// Include with: `include "smacc_isa_defs.sv"
+// smacc_isa_defs.svh: SMACC ISA constants (opcode, enums, status bits).
+// This is a header: include it from the modules that need it, don't put it
+// in the file list.
+//
+//   `include "smacc_isa_defs.svh"
 
-`ifndef SMACC_ISA_DEFS_SV
-`define SMACC_ISA_DEFS_SV
+`ifndef SMACC_ISA_DEFS_SVH
+`define SMACC_ISA_DEFS_SVH
 
 // custom-0 opcode (bits[6:0]), shared by all four SMACC instructions
 localparam logic [6:0] RISCV_OPCODE_CUSTOM0 = 7'b000_1011;
@@ -46,4 +49,4 @@ localparam logic [7:0] STATUS_BUSY_MASK  = 8'h40; // Finalization in progress
 localparam logic [7:0] STATUS_DONE_MASK  = 8'h20; // avg/stddev/delta valid
 localparam logic [7:0] STATUS_ERROR_MASK = 8'h10; // Sticky; cleared only by START
 
-`endif // SMACC_ISA_DEFS_SV
+`endif // SMACC_ISA_DEFS_SVH

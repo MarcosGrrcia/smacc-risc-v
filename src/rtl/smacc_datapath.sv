@@ -16,10 +16,7 @@
 // so partial values are never visible. All three fit 32 bits; avg saturates
 // at 2^32-1 on the sum-overflow error path rather than wrapping.
 
-`ifndef SMACC_DATAPATH_SV
-`define SMACC_DATAPATH_SV
-
-`include "smacc_isa_defs.sv"
+`include "smacc_isa_defs.svh"
 
 module smacc_datapath (
     input  logic                clk,
@@ -232,5 +229,3 @@ module smacc_datapath (
 `endif // SMACC_ASSERT
 
 endmodule: smacc_datapath
-
-`endif // SMACC_DATAPATH_SV

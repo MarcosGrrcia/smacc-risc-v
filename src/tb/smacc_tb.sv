@@ -24,8 +24,7 @@
 
 `timescale 1ns / 1ps
 
-`include "smacc_isa_defs.sv"
-`include "smacc_top.sv"
+`include "smacc_isa_defs.svh"
 
 module smacc_tb;
 
