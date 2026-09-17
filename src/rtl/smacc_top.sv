@@ -48,14 +48,14 @@ module smacc_top (
     logic [7:0]  status_byte;
     logic        results_valid;
 
-    logic [DATA_W-1:0]   mem_min_out,    mem_max_out;
-    logic [ACCUM_W-1:0]  mem_count_out,  mem_sum_out,  mem_sum_of_sq_out;
-    logic                mem_overflow;
+    logic [SMACC_DATA_W-1:0]   mem_min_out,   mem_max_out;
+    logic [SMACC_ACCUM_W-1:0]  mem_count_out, mem_sum_out, mem_sum_of_sq_out;
+    logic                      mem_overflow;
 
-    logic [DATA_W-1:0]   dp_avg, dp_stddev, dp_delta;
-    logic                dp_done;
+    logic [SMACC_DATA_W-1:0]   dp_avg, dp_stddev, dp_delta;
+    logic                      dp_done;
 
-    logic [31:0]         read_result;
+    logic [31:0]               read_result;
 
     assign is_custom0 = pcpi_valid & (pcpi_insn[6:0] == RISCV_OPCODE_CUSTOM0);
     assign is_read    = is_custom0 & (pcpi_insn[13:12] == FLV_READ);
@@ -90,7 +90,10 @@ module smacc_top (
         .results_valid (results_valid)
     );
 
-    smacc_mem u_mem (
+    smacc_mem #(
+        .DATA_W (SMACC_DATA_W),
+        .ACCUM_W(SMACC_ACCUM_W)
+    ) u_mem (
         .clk          (clk),
         .rst          (rst),
         .clear        (mem_clear),
@@ -104,7 +107,10 @@ module smacc_top (
         .overflow     (mem_overflow)
     );
 
-    smacc_datapath u_dp (
+    smacc_datapath #(
+        .DATA_W (SMACC_DATA_W),
+        .ACCUM_W(SMACC_ACCUM_W)
+    ) u_dp (
         .clk           (clk),
         .rst           (rst),
         .dp_start_final(dp_start_final),
@@ -127,9 +133,9 @@ module smacc_top (
             STAT_MIN:    read_result = (mem_count_out == '0) ? '0 : mem_min_out;
             STAT_MAX:    read_result = mem_max_out;
             STAT_AVG:    read_result = results_valid ? dp_avg : '0;
-            STAT_COUNT:  read_result = (|mem_count_out[ACCUM_W-1:DATA_W])
-                                       ? {DATA_W{1'b1}}            // saturate, don't wrap
-                                       : mem_count_out[DATA_W-1:0];
+            STAT_COUNT:  read_result = (|mem_count_out[SMACC_ACCUM_W-1:SMACC_DATA_W])
+                                       ? {SMACC_DATA_W{1'b1}}  // saturate, don't wrap
+                                       : mem_count_out[SMACC_DATA_W-1:0];
             STAT_STDDEV: read_result = results_valid ? dp_stddev : '0;
             STAT_DELTA:  read_result = results_valid ? dp_delta : '0;
             STAT_STATUS: read_result = {24'b0, status_byte};

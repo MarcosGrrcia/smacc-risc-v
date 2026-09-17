@@ -3,6 +3,9 @@
 // in the file list.
 //
 //   `include "smacc_isa_defs.svh"
+//
+// The widths below are the defaults. smacc_mem and smacc_datapath have their
+// own DATA_W/ACCUM_W parameters, and smacc_top passes these in.
 
 `ifndef SMACC_ISA_DEFS_SVH
 `define SMACC_ISA_DEFS_SVH
@@ -40,8 +43,10 @@ typedef enum logic [2:0] {
     ST_DONE       = 3'b100  // All statistics valid
 } smacc_state_e;
 
-localparam int unsigned DATA_W  = 32; // Sample width (rs1) and READ result width
-localparam int unsigned ACCUM_W = 64; // Accumulator width: count, sum, sum_of_squares
+// Architectural widths. smacc_mem and smacc_datapath take these as module
+// parameters named DATA_W/ACCUM_W; smacc_top binds them from here.
+localparam int unsigned SMACC_DATA_W  = 32; // Sample width (rs1) and READ result width
+localparam int unsigned SMACC_ACCUM_W = 64; // Accumulators: count, sum, sum_of_squares
 
 // Status byte flags (READ with sel = STAT_STATUS, zero-extended to 32 bits)
 localparam logic [7:0] STATUS_READY_MASK = 8'h80; // Initialized, accepting DATA
