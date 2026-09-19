@@ -534,4 +534,4 @@ are not meaningful and should be discarded.
 
 ---
 
-*This specification corresponds to SMACC RTL modules: `smacc_isa_defs.sv`, `smacc_ctrl.sv`, `smacc_mem.sv`, `smacc_datapath.sv`, `smacc_top.sv`.*
+*This specification corresponds to SMACC RTL modules: `smacc_isa_defs.svh`, `smacc_ctrl.sv`, `smacc_mem.sv`, `smacc_datapath.sv`, `smacc_top.sv`.*

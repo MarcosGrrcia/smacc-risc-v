@@ -86,9 +86,10 @@ stddev = sqrt( E[x^2] - E[x]^2 )
 | SQRT | 32     | `stddev = isqrt(variance)`                          |
 
 avg^2 doesn't need a multiplier. avg is known once DIV1 is done and DIV2
-never reads it, so a one-adder shift-add squarer
-(`acc ← 2·acc + (avg[31-k] ? avg : 0)`) runs during the first 32 cycles of
-DIV2. It doesn't add any latency.
+never reads it, so a separate shift-add squarer runs during DIV2. It has its
+own shift register and counter: avg shifts out MSB first while the
+accumulator does `acc ← 2·acc + (bit ? avg : 0)`. That takes 32 cycles,
+well inside DIV2's 64, so it doesn't add any latency.
 
 The square root is a bit-serial restoring isqrt: 64-bit radicand, 32-bit
 root, one root bit per cycle for 32 cycles. Same compare/subtract/shift
@@ -131,7 +132,7 @@ in flight, so a pipeline doesn't buy any throughput, just more hardware. The
 original design was a 5-stage pipeline with two single-cycle 64/64
 combinational dividers. It came to ~78 K generic cells, and the dividers
 were most of the area and the longest path. The sequential engine (one
-divider used twice, plus the squarer for avg^2) is ~12.2 K cells, about
+divider used twice, plus the squarer for avg^2) is ~12.1 K cells, about
 6.4x smaller, and the long divider path is gone. What it costs is 162
 cycles of latency. With a non-stalling STOP that's hidden: at PicoRV32's
 ~4 CPI it's only about 40 instructions.
@@ -182,30 +183,30 @@ DONE.
 
 | Metric                       | 5-stage pipeline (v1) | Sequential engine (v2) |
 |------------------------------|-----------------------|------------------------|
-| Generic cells                | ~77.8 K               | ~12.2 K                |
-| Flip-flops                   | 1,010                 | 915                    |
+| Generic cells                | ~77.8 K               | ~12.1 K                |
+| Flip-flops                   | 1,010                 | 953                    |
 | Inferred latches             | 0                     | 0                      |
 
-Cells from the latest `yosys -s scripts/synth.ys` (12,170 cells, 915 flops):
+Cells from the latest `yosys -s scripts/synth.ys` (12,061 cells, 953 flops):
 
 ```plaintext
-$_ANDNOT_   3799      $_NOT_         328
-$_AND_       387      $_ORNOT_       780
-$_DFF_P_      10      $_OR_         1148
-$_MUX_       322      $_SDFFE_PP0P_  872
-$_NAND_      483      $_SDFFE_PP1P_   32
-$_NOR_      1143      $_SDFF_PP0_      1
-$_XNOR_      973      $_XOR_        1892
+$_ANDNOT_   3639      $_NOT_         356
+$_AND_       381      $_ORNOT_       699
+$_DFF_P_      10      $_OR_         1174
+$_MUX_       321      $_SDFFE_PP0P_  909
+$_NAND_      494      $_SDFFE_PP1P_   32
+$_NOR_      1174      $_SDFF_PP0_      2
+$_XNOR_      986      $_XOR_        1884
 ```
 
-905 of the 915 flops map to synchronous-reset cells (`$_SDFF*`) and almost
+943 of the 953 flops map to synchronous-reset cells (`$_SDFF*`) and almost
 all of those have an enable. The other 10 are the FSM state bits in
 `smacc_ctrl` and `smacc_datapath`, which Yosys re-encodes and whose reset
 ends up in the next-state logic. By module: `smacc_mem` 7,318 cells,
-`smacc_datapath` 4,145, `smacc_top` 658, `smacc_ctrl` 52.
+`smacc_datapath` 4,036, `smacc_top` 658, `smacc_ctrl` 52.
 
 Most of what's left is the 32x32 squarer in `smacc_mem` and the 64-bit
-accumulator and working registers. Next to a ~30 K-cell PicoRV32, ~12.2 K
+accumulator and working registers. Next to a ~30 K-cell PicoRV32, ~12.1 K
 seems reasonable.
 
 **Power:** almost all flops come out enable-gated (`$_SDFFE_*`), which a

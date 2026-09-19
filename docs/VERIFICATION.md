@@ -173,12 +173,14 @@ The SVA sits next to the logic it checks:
   goes back to IDLE on its own.
 - **smacc_top**: the PCPI rules. `pcpi_ready` only with `pcpi_valid`, ready
   is a one-cycle pulse, and `pcpi_wr` only with ready.
-- **smacc_datapath**: `min <= max` whenever there are samples, `dp_done` is
-  a one-cycle pulse, abort sends the engine back to idle,
-  `remainder < divisor` on every divider step, and the engine never starts
-  with `count == 0`.
+- **smacc_datapath**: `dp_done` is a one-cycle pulse, abort sends the engine
+  and the squarer back to idle, `remainder < divisor` on every divider step,
+  the isqrt root and trial bits never overlap (that's what makes the OR
+  equal to an add), avg^2 is finished before the VAR step uses it, and the
+  engine never starts with `count == 0`.
 - **smacc_mem**: clear resets every accumulator, count goes up by exactly
-  one per accepted sample, and the overflow flag is sticky.
+  one per accepted sample, the overflow flag is sticky, and `min <= max`
+  whenever there are samples.
 
 Properties that use `##N` sequences, which Verilator 5.x doesn't support,
 are kept for commercial simulators and formal tools behind
@@ -202,7 +204,7 @@ The picture in the README is from around T1's STOP. To redo it:
    `dut.u_dp.dstate_r`, `dut.u_dp.dp_done`, `dut.u_dp.avg_r`,
    `dut.u_dp.stddev_r`, `dut.u_dp.delta_r`.
 3. Right-click the buses and set Data Format to Decimal (the FSM values are
-   the enums in `smacc_isa_defs.sv` and `smacc_datapath.sv`).
+   the enums in `smacc_isa_defs.svh` and `smacc_datapath.sv`).
 4. Zoom to about cycles 25 to 205 (250 ns to 2050 ns). That covers the first
    STOP, the 162-cycle FINALIZING window with the CPU still polling, and the
    `dp_done` pulse.

@@ -116,8 +116,8 @@ included):
 
 |                  | Original pipelined design | Current design |
 |------------------|---------------------------|----------------|
-| Generic cells    | ~77.8 K                   | ~12.2 K        |
-| Flip-flops       | 1,010                     | 915            |
+| Generic cells    | ~77.8 K                   | ~12.1 K        |
+| Flip-flops       | 1,010                     | 953            |
 | Inferred latches | 0                         | 0              |
 
 ## Layout
