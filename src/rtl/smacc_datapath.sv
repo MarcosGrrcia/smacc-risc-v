@@ -9,12 +9,10 @@
 // min, max and count are served straight from smacc_mem and never pass
 // through here.
 //
-// The engine runs in the background: the CPU is not stalled and polls
-// STATUS_DONE (ISA_SPEC.md section 7.3). One bit-serial divider is shared by
-// both divides, and a bit-serial squarer produces avg^2 alongside the second
-// divide, so this module contains neither a multiplier nor a combinational
-// divider. DATAPATH_DESIGN.md sections 3, 4 and 6 cover the cycle budget and
-// the area rationale for that structure.
+// The engine runs in the background while the CPU polls STATUS_DONE. One
+// bit-serial divider handles both divides, and a shift-add squarer computes
+// avg^2 during the second divide, so there's no multiplier or combinational
+// divider in here. See docs/DATAPATH_DESIGN.md for the cycle budget.
 //
 // Results are held until the next run starts and are exposed by smacc_top
 // only in ST_DONE, so partial values are never visible to software.
@@ -106,11 +104,9 @@ module smacc_datapath #(
     // ---------------------------------------------------------------------
     // Divider step
     // ---------------------------------------------------------------------
-    // Widened by one bit so the trial subtraction cannot wrap: its borrow-out
-    // is the comparison (the idiom the saturating accumulators in smacc_mem
-    // use for overflow), and the remaining ACCUM_W bits are the new partial
-    // remainder as they stand. The invariant div_rem_r < div_den_r, asserted
-    // below, is what keeps that remainder inside ACCUM_W bits.
+    // The trial subtraction is one bit wider so its borrow-out doubles as the
+    // rem >= den comparison. Since rem < den on every step (asserted below),
+    // the shifted remainder always fits back in ACCUM_W bits.
     logic [ACCUM_W:0]      div_rem_shl, div_rem_sub;
     logic                  div_ge;
     logic [ACCUM_W-1:0]    div_rem_next, div_shreg_next;
@@ -136,9 +132,9 @@ module smacc_datapath #(
     // ---------------------------------------------------------------------
     // isqrt step
     // ---------------------------------------------------------------------
-    // sq_root_r's set bits always stay above sq_b_r, because the root shifts
-    // right one place per cycle while sq_b_r drops two. The trial value can
-    // therefore be formed with an OR instead of a 64-bit add (asserted below).
+    // Standard digit-by-digit integer sqrt. sq_root_r's set bits always stay
+    // above sq_b_r (root shifts right by 1 per step, b by 2), so root + b can
+    // be an OR instead of a 64-bit add.
     logic [ACCUM_W-1:0]    sq_try, sq_root_next;
     logic                  sq_ge;
 
@@ -262,10 +258,9 @@ module smacc_datapath #(
     // ---------------------------------------------------------------------
     // avg^2 squarer
     // ---------------------------------------------------------------------
-    // Squaring avg needs no multiplier. avg_r is final the moment D_DIV2
-    // begins and the divider never reads it, so this runs concurrently with
-    // the second divide and settles MUL_ITERS cycles in, well before D_VAR
-    // consumes it (asserted below).
+    // avg is known as soon as DIV1 finishes, so square it with a shift-add
+    // loop while DIV2 runs. It takes MUL_ITERS (32) cycles, so it's done long
+    // before D_VAR needs it.
     logic mul_start;
 
     assign mul_start = (dstate_r == D_DIV1) & div_last_step;

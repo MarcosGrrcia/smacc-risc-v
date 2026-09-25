@@ -1,4 +1,4 @@
-// smacc_top.sv: SMACC Accelerator, PicoRV32 PCPI Integration
+// smacc_top.sv: PCPI front end for the SMACC accelerator
 //
 // Decodes PicoRV32 PCPI instructions with custom-0 opcode (7'b000_1011).
 // Routes START/DATA/STOP/READ to smacc_ctrl, smacc_datapath, smacc_mem.
@@ -10,7 +10,7 @@
 //
 // PCPI handshake: every instruction acks the cycle it is presented
 // (pcpi_wait tied low). STOP launches the 162-cycle engine in the
-// background; software polls STATUS_DONE (ISA_SPEC.md section 7.3).
+// background and software polls STATUS_DONE.
 //
 // READ returns full 32-bit values: min/max/count from smacc_mem,
 // avg/stddev/delta from smacc_datapath (gated to 0 unless ST_DONE).
@@ -126,8 +126,8 @@ module smacc_top (
         .dp_done       (dp_done)
     );
 
-    // READ result mux (ISA_SPEC.md section 4.4). Running stats come straight from
-    // smacc_mem; derived stats are gated to 0 outside ST_DONE.
+    // READ result mux. Running stats come straight from smacc_mem; derived
+    // stats are gated to 0 outside ST_DONE.
     always_comb begin
         case (stat_sel)
             STAT_MIN:    read_result = (mem_count_out == '0) ? '0 : mem_min_out;

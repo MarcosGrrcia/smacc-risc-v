@@ -111,8 +111,8 @@ run. Part of the output:
 *** ALL TESTS PASSED *** (2415 cycles)
 ```
 
-Synthesis with Yosys 0.33, generic cells, SMACC only (the CPU isn't
-included):
+Synthesis with Yosys 0.33, generic cells, SMACC only (PicoRV32 by itself is
+about 8.3 K cells with the same flow):
 
 |                  | Original pipelined design | Current design |
 |------------------|---------------------------|----------------|

@@ -61,7 +61,7 @@ module smacc_mem #(
     // share one branch. Reset is synchronous design-wide (see smacc_ctrl).
     always_ff @(posedge clk) begin
         if (rst || clear) begin
-            min_out       <= {DATA_W{1'b1}};  // 0xFFFF_FFFF (ISA_SPEC.md section 4.1)
+            min_out       <= {DATA_W{1'b1}};  // sentinel: first sample always wins
             max_out       <= '0;
             count_out     <= '0;
             sum_out       <= '0;
@@ -114,7 +114,7 @@ module smacc_mem #(
         !(clear && write_enable)
     ) else $warning("[smacc_mem] clear and write_enable both asserted; DATA write discarded");
 
-    // Sentinel initialisation makes this hold from the first sample onward;
+    // The min/max reset values make this hold from the first sample on;
     // smacc_datapath relies on it to compute delta without a borrow.
     ast_mem_min_le_max: assert property (
         @(posedge clk) disable iff (rst)

@@ -56,14 +56,16 @@ running values are always current. Min reads as 0 while `count == 0` so the
 
 ## 3. Average
 
-- **Accumulators:** 64-bit `sum` and `count`, enough for ~4 x 10^9
-  max-valued 32-bit samples before saturating.
+- **Accumulators:** 64-bit `sum`, `count`, and `sum_of_squares`. `sum` can
+  take 2^32 max-valued samples before it saturates, but `sum_of_squares`
+  runs out first: two samples of 2^32-1 overflow it (test T12). With 16-bit
+  data you get roughly 2^32 samples.
 - **Overflow:** the add is one bit wider and its carry-out is the overflow
   flag (see §6). The accumulator saturates at `64'hFFFF...` and sets
   STATUS_ERROR.
 - **Division:** `avg = sum / count` on the shared restoring divider, one
-  quotient bit per cycle for 64 cycles, ~200 gates of compare/subtract
-  logic. The quotient always fits in 32 bits (avg can't be bigger than the
+  quotient bit per cycle for 64 cycles, built from one 65-bit subtractor and
+  a mux. The quotient always fits in 32 bits (avg can't be bigger than the
   largest sample), except when `sum` saturated, and then the readout clamps
   at 2^32-1.
 - **Precision:** truncating integer divide, so you lose the fraction and
@@ -152,10 +154,6 @@ engine's result registers and are muxed to 0 unless the FSM is in DONE.
 START doesn't have to clear them, values mid-computation are never
 visible, and old results from a previous run can't leak into a new one.
 
-**Bit-serial isqrt instead of a lookup table.** A table is out of the
-question at this width. The bit-serial root is ~300 gates plus three 64-bit
-working registers, and it's built the same way as the divider.
-
 **One multiplier.** The only combinational multiplier left is the 32x32
 squarer in `smacc_mem`, and it has to stay single-cycle because DATA is.
 Two things keep it cheap:
@@ -206,8 +204,9 @@ ends up in the next-state logic. By module: `smacc_mem` 7,318 cells,
 `smacc_datapath` 4,036, `smacc_top` 658, `smacc_ctrl` 52.
 
 Most of what's left is the 32x32 squarer in `smacc_mem` and the 64-bit
-accumulator and working registers. Next to a ~30 K-cell PicoRV32, ~12.1 K
-seems reasonable.
+accumulator and working registers. For scale, PicoRV32 with the settings in
+`smacc_system.sv` comes to ~8.3 K cells with the same flow, so SMACC is
+about 1.5x the CPU, mostly because of that multiplier.
 
 **Power:** almost all flops come out enable-gated (`$_SDFFE_*`), which a
 clock-gating pass can turn into clock gates. The engine's working registers

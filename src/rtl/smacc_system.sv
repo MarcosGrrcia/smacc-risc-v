@@ -1,10 +1,8 @@
-// smacc_system.sv: System wrapper: PicoRV32 CPU + SMACC co-processor
+// smacc_system.sv: PicoRV32 CPU with the SMACC coprocessor attached over PCPI
 //
-// Connects the PicoRV32 PCPI bus to smacc_top internally.
-// Exposes the memory bus and IRQ interface for external integration.
-//
-// Reset: active-high rst is inverted to picorv32's active-low resetn.
-// PCPI: wired internally; no external ports needed.
+// PCPI is wired up internally, so only the CPU's memory bus and IRQ lines
+// come out of this module. rst is active-high like the rest of SMACC and is
+// inverted for picorv32's active-low resetn.
 
 module smacc_system #(
     parameter [31:0] PROGADDR_RESET = 32'h0000_0000,

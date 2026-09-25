@@ -24,8 +24,8 @@ module smacc_ctrl (
     input  logic       dp_done,        // one-cycle pulse from smacc_datapath
     input  logic       mem_overflow,   // sticky overflow flag from smacc_mem
 
-    // Status byte (ISA_SPEC.md section 5): READY/BUSY/DONE from the FSM, ERROR OR'd in
-    // independent of state. Combinational; READ returns it zero-extended.
+    // Status byte: READY/BUSY/DONE come from the FSM, ERROR is OR'd in
+    // regardless of state. Combinational; READ returns it zero-extended.
     output logic [7:0] status_byte,
     output logic       results_valid   // high in ST_DONE; gates avg/stddev/delta
 );
@@ -43,17 +43,16 @@ module smacc_ctrl (
     assign is_data  = insn_valid & (flavor == FLV_DATA);
     assign is_stop  = insn_valid & (flavor == FLV_STOP);
 
-    // ISA_SPEC.md section 4.2: DATA is dropped silently outside READY/ACCUMULATE.
+    // DATA outside READY/ACCUMULATE is dropped (and flagged below).
     assign data_accepted = is_data & ((state_r == ST_READY) | (state_r == ST_ACCUMULATE));
 
-    // ISA_SPEC.md section 9 errors: overflow, DATA with no active run, or
-    // STOP with no active run.
+    // Error sources (ISA_SPEC.md section 9): accumulator overflow, DATA with
+    // no active run, or STOP with nothing to finalize.
     assign set_error = mem_overflow
                      | (is_data & ~data_accepted)
                      | (is_stop & (state_r != ST_ACCUMULATE));
 
-    // START re-arms from any state (ISA_SPEC.md section 4.1); the rest are
-    // state-specific.
+    // START re-arms from any state; everything else depends on the state.
     always_comb begin
         state_next = state_r;
         if (is_start) begin
@@ -76,7 +75,7 @@ module smacc_ctrl (
         end else begin
             state_r <= state_next;
             if (is_start) begin
-                err_sticky_r <= 1'b0;  // ISA_SPEC.md section 4.1: START clears STATUS_ERROR
+                err_sticky_r <= 1'b0;  // only START clears STATUS_ERROR
             end else if (set_error) begin
                 err_sticky_r <= 1'b1;
             end
