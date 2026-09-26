@@ -77,6 +77,28 @@ bash scripts/run_tests.sh --wave    # same, and dumps smacc_tb.vcd
 yosys -s scripts/synth.ys           # synthesis + area report
 ```
 
+## Using it from C
+
+[`sw/smacc.h`](sw/smacc.h) wraps the instructions with `.insn`, so the stock
+riscv32 GCC works without any assembler changes:
+
+```c
+#include "smacc.h"
+
+smacc_start();
+for (uint32_t i = 0; i < n; i++)
+    smacc_data(samples[i]);
+smacc_stop();                       /* returns immediately */
+smacc_wait_done();                  /* ~162 cycles, or poll smacc_status() */
+
+uint32_t avg    = smacc_read_avg();
+uint32_t stddev = smacc_read_stddev();
+```
+
+[`sw/example.c`](sw/example.c) is a complete example. It builds with
+`riscv64-unknown-elf-gcc -march=rv32i -mabi=ilp32` and the disassembly
+matches the encoding table (see [docs/VERIFICATION.md](docs/VERIFICATION.md)).
+
 ## Verification and results
 
 The testbench drives the PCPI bus directly. T1 through T12 check against
@@ -125,6 +147,7 @@ about 8.3 K cells with the same flow):
 ```plaintext
 src/rtl/      SMACC RTL, PicoRV32, and smacc_system.sv (CPU + SMACC)
 src/tb/       Testbench
+sw/           C header and example
 docs/         ISA spec, datapath design, verification
 scripts/      Test and synthesis scripts
 ```

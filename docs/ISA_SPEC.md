@@ -414,8 +414,8 @@ smacc.read x7, DELTA            ; 32'h0050_338B, x7 = 20
 smacc.read x8, STATUS           ; 32'h0060_340B, x8 = 0x20 (STATUS_DONE)
 ```
 
-No standard assembler knows the `smacc.*` mnemonics. They're just shorthand
-here for the encodings in §7.2.
+No standard assembler knows the `smacc.*` mnemonics. In C, use the wrappers
+in [`sw/smacc.h`](../sw/smacc.h), which emit these encodings with `.insn`.
 
 ### 7.2 Machine Encoding Reference
 

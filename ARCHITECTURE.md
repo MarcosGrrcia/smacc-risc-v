@@ -53,6 +53,8 @@ readouts saturate instead of wrapping (count at 2^32-1).
   both divides plus a bit-serial isqrt, 162 cycles
 - `smacc_top.sv`: PCPI decode, READ mux, wiring
 - `smacc_system.sv`: PicoRV32 + smacc_top connected over PCPI
+- `sw/smacc.h`: C wrappers (`.insn`) so a stock GCC can emit the
+  instructions
 
 ## Design decisions
 

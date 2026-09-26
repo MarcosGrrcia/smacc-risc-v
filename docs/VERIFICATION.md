@@ -214,6 +214,34 @@ The picture in the README is from around T1's STOP. To redo it:
 CPU isn't stalled), the engine goes through DIV1/DIV2/VAR/SQRT, and
 `delta_r`/`avg_r`/`stddev_r` settle at 45/27/15 before the FSM gets to DONE.
 
+## C API check
+
+`sw/example.c`, which uses every wrapper in `sw/smacc.h`, builds clean for
+the target:
+
+```sh
+riscv64-unknown-elf-gcc -march=rv32i -mabi=ilp32 -O2 -Wall -Wextra \
+    -c sw/example.c -o build/example.o
+```
+
+Every instruction word in the disassembly matches the encoding table in
+ISA_SPEC.md section 7.2 (rd/rs1 depend on register allocation):
+
+```plaintext
+0000000b    START
+0007100b    DATA   rs1=a4
+0000200b    STOP
+0000378b    READ   sel=0 (MIN),    rd=a5
+0010378b    READ   sel=1 (MAX),    rd=a5
+0020378b    READ   sel=2 (AVG),    rd=a5
+0030378b    READ   sel=3 (COUNT),  rd=a5
+0040378b    READ   sel=4 (STDDEV), rd=a5
+0050378b    READ   sel=5 (DELTA),  rd=a5
+0060378b    READ   sel=6 (STATUS), rd=a5
+```
+
+They're the same words the testbench drives over PCPI.
+
 ## Known gaps
 
 - `smacc_system.sv` (PicoRV32 + SMACC) isn't simulated. The testbench
