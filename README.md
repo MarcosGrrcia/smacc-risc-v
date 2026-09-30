@@ -6,8 +6,8 @@ min, max, count, average, standard deviation, and range (max - min). The CPU
 drives it with four custom instructions over PicoRV32's PCPI coprocessor
 interface.
 
-It started as our final project for a System-on-Chip course in Fall 2024
-(tagged `v1.0`) and we've kept coming back to it since. Compared to the
+It started as our final project for a System-on-Chip course (tagged `v1.0`) 
+and we've kept coming back to it since. Compared to the
 course version, the pipelined datapath is gone in favor of a bit-serial one
 that's about a sixth of the size, STOP no longer stalls the CPU, and the
 testbench and assertions are a lot more thorough.
